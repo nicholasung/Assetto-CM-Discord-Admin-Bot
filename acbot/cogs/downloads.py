@@ -51,17 +51,27 @@ class DownloadsCog(commands.GroupCog, group_name="download",
             await interaction.response.send_message("No cars found.", ephemeral=True)
             return
         
-        # Build list
+        # Split into chunks of 20 cars per message (to avoid hitting message length limit)
+        chunk_size = 20
+        chunks = [cars[i:i + chunk_size] for i in range(0, len(cars), chunk_size)]
+        
+        # Send first message as response
+        first_chunk = chunks[0]
         lines = ["**Available Cars:**\n"]
-        for car in cars[:50]:  # Limit to 50 to avoid message length
+        for car in first_chunk:
             lines.append(f"• `{car.car_id}` — {car.display_name}")
         
-        if len(cars) > 50:
-            lines.append(f"\n... and {len(cars) - 50} more.")
-        
-        lines.append("\nUse `/download car <name>` to get a download link.")
-        
         await interaction.response.send_message("\n".join(lines))
+        
+        # Send remaining chunks as follow-ups
+        for chunk in chunks[1:]:
+            lines = []
+            for car in chunk:
+                lines.append(f"• `{car.car_id}` — {car.display_name}")
+            await interaction.followup.send("\n".join(lines))
+        
+        # Send final message with instruction
+        await interaction.followup.send("Use `/download car <name>` to get a download link.")
     
     @app_commands.command(name="tracks", description="List all available tracks")
     async def list_tracks(self, interaction: discord.Interaction) -> None:
@@ -80,17 +90,27 @@ class DownloadsCog(commands.GroupCog, group_name="download",
             await interaction.response.send_message("No tracks found.", ephemeral=True)
             return
         
-        # Build list
+        # Split into chunks of 25 tracks per message
+        chunk_size = 25
+        chunks = [tracks[i:i + chunk_size] for i in range(0, len(tracks), chunk_size)]
+        
+        # Send first message as response
+        first_chunk = chunks[0]
         lines = ["**Available Tracks:**\n"]
-        for track in tracks[:50]:
+        for track in first_chunk:
             lines.append(f"• `{track}`")
         
-        if len(tracks) > 50:
-            lines.append(f"\n... and {len(tracks) - 50} more.")
-        
-        lines.append("\nUse `/download track <name>` to get a download link.")
-        
         await interaction.response.send_message("\n".join(lines))
+        
+        # Send remaining chunks as follow-ups
+        for chunk in chunks[1:]:
+            lines = []
+            for track in chunk:
+                lines.append(f"• `{track}`")
+            await interaction.followup.send("\n".join(lines))
+        
+        # Send final message with instruction
+        await interaction.followup.send("Use `/download track <name>` to get a download link.")
     
     @app_commands.command(name="car", description="Get download link for a car")
     @app_commands.autocomplete(name=_car_autocomplete)
