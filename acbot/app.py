@@ -101,6 +101,12 @@ class App:
         self.public_ip = await resolve_public_ip(self.cfg.server.public_ip)
         if self.public_ip:
             log.info("public IP: %s", self.public_ip)
+        self.file_server = FileServer(
+            host="0.0.0.0",
+            port=8082,
+            root_dir=self.cfg.paths.ac_root / "content"
+        )
+        await self.file_server.start()
 
     async def shutdown(self) -> None:
         self.listener.close()
