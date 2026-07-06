@@ -23,6 +23,42 @@ from .state import BotState
 log = logging.getLogger(__name__)
 
 
+from aiohttp import web
+
+class FileServer:
+    def __init__(self, host: str, port: int, root_dir: Path):
+        self.app = web.Application()
+        self.app.router.add_get('/downloads/{filename:.+}', self._serve_file)
+        self.runner = None
+        self.site = None
+        self.root = root_dir
+        self.host = host
+        self.port = port
+    
+    async def _serve_file(self, request: web.Request) -> web.FileResponse:
+        filename = request.match_info['filename']
+        fpath = (self.root / filename).resolve()
+        
+        # Security: block directory traversal
+        if not str(fpath).startswith(str(self.root)):
+            raise web.HTTPForbidden()
+        
+        if not fpath.exists():
+            raise web.HTTPNotFound()
+        
+        return web.FileResponse(fpath)
+    
+    async def start(self) -> None:
+        self.runner = web.AppRunner(self.app)
+        await self.runner.setup()
+        self.site = web.TCPSite(self.runner, self.host, self.port)
+        await self.site.start()
+        log.info(f"Download server running on {self.host}:{self.port}")
+    
+    async def stop(self) -> None:
+        if self.runner:
+            await self.runner.cleanup()
+            
 class App:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -111,6 +147,7 @@ class App:
     async def shutdown(self) -> None:
         self.listener.close()
         await self.db.close()
+        await self.file_server.stop()
 
     async def autostart_if_configured(self) -> None:
         """Launch the AC server on bot boot if server.autostart is set.
