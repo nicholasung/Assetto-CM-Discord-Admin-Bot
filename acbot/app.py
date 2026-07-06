@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-
+import shutil, tempfile
 from .ac.backends.assettoserver import AssettoServerBackend
 from .ac.backends.base import BackendError, ServerBackend
 from .ac.backends.vanilla import VanillaBackend
@@ -35,20 +35,24 @@ class FileServer:
         self.host = host
         self.port = port
     
-    async def _serve_file(self, request: web.Request) -> web.FileResponse:
-        filename = request.match_info['filename']
-        fpath = (self.root / filename).resolve()
-    
-        # Security: block directory traversal (path-aware, not string-aware)
-        try:
-            fpath.relative_to(self.root)
-        except ValueError:
-            raise web.HTTPForbidden()
-    
-        if not fpath.is_file():
-            raise web.HTTPNotFound()
-    
-        return web.FileResponse(fpath)
+async def _serve_file(self, request: web.Request) -> web.FileResponse:
+    filename = request.match_info['filename']
+    fpath = (self.root / filename).resolve()
+
+    try:
+        fpath.relative_to(self.root)
+    except ValueError:
+        raise web.HTTPForbidden()
+
+    if not fpath.exists():
+        raise web.HTTPNotFound()
+
+    if fpath.is_dir():
+        tmp = Path(tempfile.mkdtemp()) / f"{fpath.name}.zip"
+        shutil.make_archive(str(tmp.with_suffix('')), 'zip', root_dir=fpath)
+        return web.FileResponse(tmp)
+
+    return web.FileResponse(fpath)
     
     async def start(self) -> None:
         self.runner = web.AppRunner(self.app)
