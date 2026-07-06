@@ -1,0 +1,85 @@
+# acbot configuration.
+# Copy to config.yaml next to this file and fill in your values.
+# The Discord bot token is NOT stored here: set the ACBOT_DISCORD_TOKEN
+# environment variable (see README for service setup).
+
+discord:
+  # Server (guild) the bot operates in. Commands are registered guild-scoped
+  # so they appear instantly.
+  guild_id: 000000000000000000
+
+  # Users need at least one of these roles to run state-changing commands
+  # (start/stop/restart, preset apply, entry edits, settings). Read-only
+  # commands (/server status, /join, /lb ...) are open to everyone.
+  admin_role_ids:
+    - 000000000000000000
+
+  # Channel that holds the auto-updating "server status" message
+  # (created/refreshed with /status pin).
+  status_channel_id: 000000000000000000
+
+  # Optional: channel where every admin action is logged. Remove or set to
+  # null to log to file only.
+  audit_channel_id: null
+
+paths:
+  # Full Assetto Corsa install (the bot reads content\cars\<car>\skins\<skin>
+  # from here for car/skin options).
+  ac_root: 'C:\Program Files (x86)\Steam\steamapps\common\assettocorsa'
+
+  # Vanilla dedicated server folder (contains acServer.exe).
+  server_dir: 'C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\server'
+
+  # Optional: AssettoServer install folder (contains AssettoServer.exe).
+  # Only needed when server.backend is "assettoserver".
+  assettoserver_dir: null
+
+  # Content Manager server presets folder. "auto" tries the known CM
+  # locations; run `python -m acbot doctor` to see what it finds, and set an
+  # explicit path if auto-detection misses.
+  cm_presets_dir: auto
+
+  # Where the bot keeps its own files (staged config, leaderboard db, logs,
+  # state). Relative paths are resolved against the bot folder.
+  data_dir: data
+
+server:
+  # "vanilla" (acServer.exe) or "assettoserver" (AssettoServer.exe)
+  backend: vanilla
+
+  # Public IP used in join links. "auto" resolves it once at startup via
+  # api.ipify.org; set explicitly if the VM has a static/forwarded address.
+  public_ip: auto
+
+  # Minimum seconds between start/stop/restart actions.
+  restart_cooldown_s: 60
+
+  # Seconds between refreshes of the persistent status message.
+  status_poll_s: 30
+
+  # When the bot starts (e.g. on VM boot), automatically launch the AC
+  # server too, reusing whatever preset was last staged (persists across
+  # bot restarts once you've run /preset apply at least once). If a stray
+  # AC server is already running, autostart backs off and just logs it
+  # rather than touching it.
+  autostart: false
+
+  # UDP plugin wiring, enforced on every staged config so the live layer
+  # always works regardless of what the preset says:
+  #   - the server listens for plugin traffic on udp_plugin_server_port
+  #   - the bot listens for server events on udp_plugin_listen
+  udp_plugin_server_port: 11000
+  udp_plugin_listen: 127.0.0.1:12000
+
+assettoserver:
+  # Optional per-version wiring for AssettoServer extras. AS is actively
+  # developed and key names change; check your extra_cfg.yml.
+  #
+  # Dot-path into cfg/extra_cfg.yml toggled by /settings collisions,
+  # e.g. "IgnoreCollisions" or "Plugin.SomeKey". Leave null if your AS
+  # version has no such switch (the command will explain that).
+  collisions_yaml_key: null
+  # Console command template for live time changes (sent to AS stdin),
+  # e.g. "/settime {hour:02d}:{minute:02d}". Leave null to fall back to
+  # staged SUN_ANGLE + restart.
+  settime_console_template: null
