@@ -31,21 +31,23 @@ class FileServer:
         self.app.router.add_get('/downloads/{filename:.+}', self._serve_file)
         self.runner = None
         self.site = None
-        self.root = root_dir
+        self.root = root_dir.resolve()
         self.host = host
         self.port = port
     
     async def _serve_file(self, request: web.Request) -> web.FileResponse:
         filename = request.match_info['filename']
         fpath = (self.root / filename).resolve()
-        
-        # Security: block directory traversal
-        if not str(fpath).startswith(str(self.root)):
+    
+        # Security: block directory traversal (path-aware, not string-aware)
+        try:
+            fpath.relative_to(self.root)
+        except ValueError:
             raise web.HTTPForbidden()
-        
-        if not fpath.exists():
+    
+        if not fpath.is_file():
             raise web.HTTPNotFound()
-        
+    
         return web.FileResponse(fpath)
     
     async def start(self) -> None:
