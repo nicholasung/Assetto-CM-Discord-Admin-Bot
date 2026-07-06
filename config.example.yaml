@@ -71,6 +71,16 @@ server:
   udp_plugin_server_port: 11000
   udp_plugin_listen: 127.0.0.1:12000
 
+downloads:
+  # Port the content download HTTP server listens on (internally).
+  # If port-forwarded differently (e.g. 8082 → 8083), set download_port_external
+  # so Discord links use the correct public port.
+  port: 8082
+  
+  # Optional: public-facing port if different from internal port (e.g. due to
+  # port forwarding). Leave blank or null to use 'port' for both internal and external.
+  port_external: null
+
 assettoserver:
   # Optional per-version wiring for AssettoServer extras. AS is actively
   # developed and key names change; check your extra_cfg.yml.
