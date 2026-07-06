@@ -55,23 +55,27 @@ class DownloadsCog(commands.GroupCog, group_name="download",
         chunk_size = 20
         chunks = [cars[i:i + chunk_size] for i in range(0, len(cars), chunk_size)]
         
-        # Send first message as response
+        # Send first message as response, create thread if multiple chunks
         first_chunk = chunks[0]
         lines = ["**Available Cars:**\n"]
         for car in first_chunk:
             lines.append(f"• `{car.car_id}` — {car.display_name}")
         
-        await interaction.response.send_message("\n".join(lines))
+        msg = await interaction.response.send_message("\n".join(lines))
         
-        # Send remaining chunks as follow-ups
-        for chunk in chunks[1:]:
-            lines = []
-            for car in chunk:
-                lines.append(f"• `{car.car_id}` — {car.display_name}")
-            await interaction.followup.send("\n".join(lines))
-        
-        # Send final message with instruction
-        await interaction.followup.send("Use `/download car <name>` to get a download link.")
+        # If there are more chunks, create a thread and send them there
+        if len(chunks) > 1:
+            thread = await msg.create_thread(name="Car List")
+            
+            # Send remaining chunks in the thread
+            for chunk in chunks[1:]:
+                lines = []
+                for car in chunk:
+                    lines.append(f"• `{car.car_id}` — {car.display_name}")
+                await thread.send("\n".join(lines))
+            
+            # Send instruction in the thread
+            await thread.send("Use `/download car <name>` to get a download link.")
     
     @app_commands.command(name="tracks", description="List all available tracks")
     async def list_tracks(self, interaction: discord.Interaction) -> None:
@@ -94,23 +98,27 @@ class DownloadsCog(commands.GroupCog, group_name="download",
         chunk_size = 25
         chunks = [tracks[i:i + chunk_size] for i in range(0, len(tracks), chunk_size)]
         
-        # Send first message as response
+        # Send first message as response, create thread if multiple chunks
         first_chunk = chunks[0]
         lines = ["**Available Tracks:**\n"]
         for track in first_chunk:
             lines.append(f"• `{track}`")
         
-        await interaction.response.send_message("\n".join(lines))
+        msg = await interaction.response.send_message("\n".join(lines))
         
-        # Send remaining chunks as follow-ups
-        for chunk in chunks[1:]:
-            lines = []
-            for track in chunk:
-                lines.append(f"• `{track}`")
-            await interaction.followup.send("\n".join(lines))
-        
-        # Send final message with instruction
-        await interaction.followup.send("Use `/download track <name>` to get a download link.")
+        # If there are more chunks, create a thread and send them there
+        if len(chunks) > 1:
+            thread = await msg.create_thread(name="Track List")
+            
+            # Send remaining chunks in the thread
+            for chunk in chunks[1:]:
+                lines = []
+                for track in chunk:
+                    lines.append(f"• `{track}`")
+                await thread.send("\n".join(lines))
+            
+            # Send instruction in the thread
+            await thread.send("Use `/download track <name>` to get a download link.")
     
     @app_commands.command(name="car", description="Get download link for a car")
     @app_commands.autocomplete(name=_car_autocomplete)
