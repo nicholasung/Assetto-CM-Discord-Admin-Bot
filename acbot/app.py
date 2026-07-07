@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import shutil
 from pathlib import Path
-import shutil, tempfile
+
 from .ac.backends.assettoserver import AssettoServerBackend
 from .ac.backends.base import BackendError, ServerBackend
 from .ac.backends.vanilla import VanillaBackend
@@ -26,45 +28,66 @@ log = logging.getLogger(__name__)
 from aiohttp import web
 
 class FileServer:
-    def __init__(self, host: str, port: int, root_dir: Path):
+    """Serves AC content over HTTP. Folders are zipped on demand; only the
+    most recently requested zip is kept on disk so the cache dir never grows."""
+
+    def __init__(self, host: str, port: int, root_dir: Path, cache_dir: Path):
         self.app = web.Application()
         self.app.router.add_get('/downloads/{filename:.+}', self._serve_file)
         self.runner = None
         self.site = None
         self.root = root_dir.resolve()
+        self.cache_dir = cache_dir
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.host = host
         self.port = port
-    
-async def _serve_file(self, request: web.Request) -> web.FileResponse:
-    filename = request.match_info['filename']
-    fpath = (self.root / filename).resolve()
+        self._zip_lock = asyncio.Lock()
 
-    try:
-        fpath.relative_to(self.root)
-    except ValueError:
-        raise web.HTTPForbidden()
+    async def _serve_file(self, request: web.Request) -> web.FileResponse:
+        filename = request.match_info['filename']
+        fpath = (self.root / filename).resolve()
 
-    if not fpath.exists():
-        raise web.HTTPNotFound()
+        try:
+            fpath.relative_to(self.root)
+        except ValueError:
+            raise web.HTTPForbidden()
 
-    if fpath.is_dir():
-        tmp = Path(tempfile.mkdtemp()) / f"{fpath.name}.zip"
-        shutil.make_archive(str(tmp.with_suffix('')), 'zip', root_dir=fpath)
-        return web.FileResponse(tmp)
+        if not fpath.exists():
+            raise web.HTTPNotFound()
 
-    return web.FileResponse(fpath)
-    
+        if fpath.is_dir():
+            fpath = await self._package(fpath)
+
+        return web.FileResponse(fpath)
+
+    async def _package(self, folder: Path) -> Path:
+        """Zip `folder` into cache_dir, clearing any previously hosted zip first."""
+        async with self._zip_lock:
+            self._clear_cache()
+            archive = await asyncio.to_thread(
+                shutil.make_archive, str(self.cache_dir / folder.name), "zip", root_dir=folder
+            )
+            return Path(archive)
+
+    def _clear_cache(self) -> None:
+        for stale in self.cache_dir.glob("*.zip"):
+            try:
+                stale.unlink()
+            except OSError:
+                log.warning("could not remove stale zip %s (still being downloaded?)", stale)
+
     async def start(self) -> None:
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
         self.site = web.TCPSite(self.runner, self.host, self.port)
         await self.site.start()
         log.info(f"Download server running on {self.host}:{self.port}")
-    
+
     async def stop(self) -> None:
         if self.runner:
             await self.runner.cleanup()
-            
+        self._clear_cache()
+
 class App:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -146,7 +169,8 @@ class App:
         self.file_server = FileServer(
             host="0.0.0.0",
             port=8082,
-            root_dir=self.cfg.paths.ac_root / "content"
+            root_dir=self.cfg.paths.ac_root / "content",
+            cache_dir=self.cfg.downloads_cache_dir,
         )
         await self.file_server.start()
 

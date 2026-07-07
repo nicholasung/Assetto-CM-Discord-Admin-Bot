@@ -177,13 +177,17 @@ class StatusCog(commands.Cog):
             await self._refresh_status_message()
         self._debounce = asyncio.create_task(_later())
 
-    async def _on_server_exited(self, code: object = None, **_: object) -> None:
+    async def _on_server_exited(self, code: object = None, tail: str = "",
+                                **_: object) -> None:
         await self._on_change()
         channel_id = self.app.cfg.discord.status_channel_id
         channel = self.bot.get_channel(channel_id) if channel_id else None
         if isinstance(channel, discord.TextChannel):
+            msg = (f"⚠️ The AC server exited unexpectedly (code {code}). "
+                   "An admin can `/server start` it again.")
+            if tail:
+                # Discord code blocks cap at 4096; keep the last chunk of output.
+                snippet = tail[-1500:]
+                msg += f"\nLast output before it quit:\n```\n{snippet}\n```"
             with contextlib.suppress(discord.HTTPException):
-                await channel.send(
-                    f"⚠️ The AC server exited unexpectedly (code {code}). "
-                    "An admin can `/server start` it again."
-                )
+                await channel.send(msg)

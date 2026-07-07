@@ -1,6 +1,8 @@
 
 A vibecoded discord bot so that I can try out claude fable. Probably easily adapted for other peoples' use case
 
+
+
 # Assetto Corsa CM Discord Admin Bot
 
 A Discord bot that administers an Assetto Corsa dedicated server (managed with

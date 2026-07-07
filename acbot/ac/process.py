@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -193,8 +194,14 @@ class ServerProcess:
                 p.kill()
 
     async def _pump_output(self, proc: asyncio.subprocess.Process) -> None:
-        """Stream server stdout to the session log file; notice unexpected death."""
+        """Stream server stdout to the session log file; notice unexpected death.
+
+        The last few output lines are kept in memory so that if the server dies
+        right after launch, the reason it printed (bad config, port in use,
+        missing content, …) is surfaced instead of a bare exit code.
+        """
         assert proc.stdout is not None
+        tail: deque[str] = deque(maxlen=25)
         try:
             with open(self.log_path, "ab") as f:  # type: ignore[arg-type]
                 while True:
@@ -203,11 +210,21 @@ class ServerProcess:
                         break
                     f.write(line)
                     f.flush()
+                    text = line.decode("utf-8", "replace").rstrip()
+                    if text:
+                        tail.append(text)
         except (OSError, ValueError):
             log.exception("log pump failed")
         code = await proc.wait()
         if not self._stopping and self._proc is proc:
-            log.warning("server exited unexpectedly with code %s", code)
+            recent = "\n".join(tail)
+            log.error(
+                "server exited unexpectedly with code %s (see %s)%s",
+                code, self.log_path,
+                f"\n--- last output ---\n{recent}" if recent else " — no output captured",
+            )
             self._proc = None
             self.started_at = None
-            await self.bus.emit("server_exited", code=code)
+            await self.bus.emit(
+                "server_exited", code=code, tail=recent, log_path=str(self.log_path)
+            )

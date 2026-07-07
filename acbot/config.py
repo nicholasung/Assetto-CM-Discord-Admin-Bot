@@ -90,6 +90,10 @@ class Config:
     def state_path(self) -> Path:
         return self.data_dir / "state.json"
 
+    @property
+    def downloads_cache_dir(self) -> Path:
+        return self.data_dir / "downloads_cache"
+
     def token(self) -> str:
         tok = os.environ.get(TOKEN_ENV, "").strip()
         if not tok:
@@ -97,7 +101,7 @@ class Config:
         return tok
 
     def ensure_dirs(self) -> None:
-        for d in (self.data_dir, self.staging_dir, self.logs_dir):
+        for d in (self.data_dir, self.staging_dir, self.logs_dir, self.downloads_cache_dir):
             d.mkdir(parents=True, exist_ok=True)
 
 
