@@ -172,8 +172,11 @@ class UploadsCog(commands.GroupCog, group_name="upload",
             await self.app.content.ensure_loaded(force=True)
         cars = ", ".join(installed)
         await self.bot.audit(interaction, f"approved car install: {cars}")
-        await self._finish(interaction, discord.Color.green(),
-                           f"✅ Installed **{cars}** — approved by {interaction.user.mention}.")
+        # Clear the prompt from the channel now that it's installed.
+        if interaction.message is not None:
+            with contextlib.suppress(discord.HTTPException):
+                await interaction.message.delete()
+        await interaction.followup.send(f"✅ Installed **{cars}**.", ephemeral=True)
 
     async def reject(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer()

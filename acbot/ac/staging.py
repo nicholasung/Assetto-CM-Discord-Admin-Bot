@@ -159,23 +159,30 @@ class Staging:
         raw = self.server_cfg().get("SERVER", "CARS", "") or ""
         return [c.strip() for c in raw.split(";") if c.strip()]
 
-    def ensure_car_allowed(self, model: str) -> bool:
-        """Add `model` to the [SERVER] CARS allow-list if missing.
+    def sync_allowed_cars(self) -> list[str]:
+        """Rewrite [SERVER] CARS to exactly the distinct entry-list models (slot order).
 
-        The AC server validates every entry's MODEL against CARS and refuses to
-        start ("car X is illegal") when one is absent — so a car swap has to
-        touch server_cfg.ini too, not just entry_list.ini (Content Manager does
-        both). Append-only: never drops a car another slot or pickup mode allows.
-        Returns True when it had to add the model.
+        Two failure modes hang off CARS drifting from the entry list, and
+        Content Manager avoids both by keeping them identical:
+          * a model in the entry list but missing from CARS → the server refuses
+            to start ("car X is illegal");
+          * a model left in CARS with no slot using it → CM greys the car out
+            with no entry count, and the server logs "checksum: Folder not found".
+        So mirror CM: CARS = the set of models currently slotted. Returns it.
         """
+        models: list[str] = []
+        seen: set[str] = set()
+        for entry in self.entries():
+            key = entry.model.lower()
+            if entry.model and key not in seen:
+                seen.add(key)
+                models.append(entry.model)
         cfg = self.server_cfg()
-        cars = [c.strip() for c in (cfg.get("SERVER", "CARS", "") or "").split(";") if c.strip()]
-        if any(c.lower() == model.lower() for c in cars):
-            return False
-        cars.append(model)
-        cfg.set("SERVER", "CARS", ";".join(cars))
-        cfg.save(self.server_cfg_path)
-        return True
+        current = [c.strip() for c in (cfg.get("SERVER", "CARS", "") or "").split(";") if c.strip()]
+        if {c.lower() for c in current} != seen or not current:
+            cfg.set("SERVER", "CARS", ";".join(models))
+            cfg.save(self.server_cfg_path)
+        return models
 
     def set_entry_car(self, slot: int, model: str, skin: str) -> str:
         el = self.entry_list()
@@ -187,9 +194,8 @@ class Staging:
         el.set(section, "MODEL", model)
         el.set(section, "SKIN", skin)
         el.save(self.entry_list_path)
-        added = self.ensure_car_allowed(model)
-        note = "  (added to allowed cars)" if added else ""
-        return f"slot {slot}: {old_model} [{old_skin}] → {model} [{skin}]{note}"
+        self.sync_allowed_cars()
+        return f"slot {slot}: {old_model} [{old_skin}] → {model} [{skin}]"
 
     def set_entry_skin(self, slot: int, skin: str) -> str:
         el = self.entry_list()

@@ -22,8 +22,9 @@ log = logging.getLogger(__name__)
 ZIP_FILE = "pending.zip"
 META_FILE = "pending.json"
 
-# Guard against zip bombs / absurd uploads (total uncompressed size).
-MAX_UNCOMPRESSED_BYTES = 3 * 1024 * 1024 * 1024  # 3 GiB
+# Guard against zip bombs (total uncompressed size). Kept well above the 1 GB
+# upload cap so a legitimate large car mod isn't rejected on its expanded size.
+MAX_UNCOMPRESSED_BYTES = 6 * 1024 * 1024 * 1024  # 6 GiB
 
 # A member has to look like real car content or we refuse the whole zip.
 _CAR_MARKERS = ("data.acd", "ui_car.json")

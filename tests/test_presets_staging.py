@@ -60,20 +60,24 @@ def test_set_entry_car_only_touches_target(staging: Staging, presets_dir: Path):
 
 
 def test_set_entry_car_adds_to_allowed_cars(staging: Staging):
-    # Fresh model not in server_cfg CARS: the server would call it "illegal"
-    # unless we also add it to the allow-list.
+    # A fresh model must land in server_cfg CARS or the server calls it "illegal".
     assert "lotus_elise_sc" not in staging.allowed_cars()
-    desc = staging.set_entry_car(1, "lotus_elise_sc", "")
-    assert "added to allowed cars" in desc
-    assert "lotus_elise_sc" in staging.allowed_cars()
+    staging.set_entry_car(1, "lotus_elise_sc", "")
+    # CARS mirrors the entry list, in slot order, with no duplicates.
+    assert staging.allowed_cars() == ["ks_mazda_mx5_cup", "lotus_elise_sc", "abarth500"]
+
+
+def test_set_entry_car_prunes_orphaned_allowed_cars(staging: Staging):
+    # abarth500 is only used by CAR_2; swapping it away must drop it from CARS,
+    # else CM greys it out with no entry count.
+    assert "abarth500" in staging.allowed_cars()
+    staging.set_entry_car(2, "ks_mazda_mx5_cup", "red")
+    assert staging.allowed_cars() == ["ks_mazda_mx5_cup"]
 
 
 def test_set_entry_car_existing_model_not_duplicated(staging: Staging):
-    before = staging.allowed_cars()
-    assert "abarth500" in before  # already allowed by the preset
-    desc = staging.set_entry_car(1, "abarth500", "stripes")
-    assert "added to allowed cars" not in desc
-    assert staging.allowed_cars() == before  # no duplicate appended
+    staging.set_entry_car(1, "abarth500", "stripes")  # CAR_2 already uses abarth500
+    assert staging.allowed_cars() == ["ks_mazda_mx5_cup", "abarth500"]
 
 
 def test_set_entry_skin_and_missing_slot(staging: Staging):

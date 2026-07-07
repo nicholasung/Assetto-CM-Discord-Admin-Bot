@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 from aiohttp import web
 
 # Cap per uploaded car zip; the request body limit adds headroom for multipart.
-UPLOAD_MAX_BYTES = 600 * 1024 * 1024  # 600 MB
+UPLOAD_MAX_BYTES = 1024 * 1024 * 1024  # 1 GB
 
 
 class _UploadTooLarge(Exception):
