@@ -12,7 +12,6 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -54,7 +53,7 @@ class ServerProcess:
         self.bus = bus
         self._lock = asyncio.Lock()
         self._proc: asyncio.subprocess.Process | None = None
-        self._pump_task: asyncio.Task | None = None
+        self._watch_task: asyncio.Task | None = None
         self._stopping = False
         self._last_action = 0.0
         self.backend: ServerBackend | None = None
@@ -119,17 +118,25 @@ class ServerProcess:
 
             log.info("starting %s: %s", backend.name, exe)
             self._stopping = False
-            self._proc = await asyncio.create_subprocess_exec(
-                str(exe), *backend.args(),
-                cwd=str(backend.cwd()),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
+            # Send the server's output straight to the session log file via the
+            # OS. Pumping every line through the event loop (with a per-line
+            # flush) let a chatty live server starve Discord's heartbeat and the
+            # 3s slash-command ack window -> "Unknown interaction" on everything.
+            log_file = open(self.log_path, "ab")
+            try:
+                self._proc = await asyncio.create_subprocess_exec(
+                    str(exe), *backend.args(),
+                    cwd=str(backend.cwd()),
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=log_file,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+            finally:
+                log_file.close()  # the child keeps its own inherited handle
             self.backend = backend
             self.started_at = time.time()
             self._last_action = time.time()
-            self._pump_task = asyncio.create_task(self._pump_output(self._proc))
+            self._watch_task = asyncio.create_task(self._watch(self._proc))
         await self.bus.emit("server_started", backend=backend.name)
 
     async def stop(self, skip_cooldown: bool = True) -> int | None:
@@ -193,38 +200,37 @@ class ServerProcess:
             with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
                 p.kill()
 
-    async def _pump_output(self, proc: asyncio.subprocess.Process) -> None:
-        """Stream server stdout to the session log file; notice unexpected death.
+    async def _watch(self, proc: asyncio.subprocess.Process) -> None:
+        """Wait for the server to exit; if it wasn't asked to stop, surface why.
 
-        The last few output lines are kept in memory so that if the server dies
-        right after launch, the reason it printed (bad config, port in use,
-        missing content, …) is surfaced instead of a bare exit code.
+        The reason the server printed (bad config, port in use, missing content,
+        …) is read from the tail of the session log so it shows up instead of a
+        bare exit code.
         """
-        assert proc.stdout is not None
-        tail: deque[str] = deque(maxlen=25)
-        try:
-            with open(self.log_path, "ab") as f:  # type: ignore[arg-type]
-                while True:
-                    line = await proc.stdout.readline()
-                    if not line:
-                        break
-                    f.write(line)
-                    f.flush()
-                    text = line.decode("utf-8", "replace").rstrip()
-                    if text:
-                        tail.append(text)
-        except (OSError, ValueError):
-            log.exception("log pump failed")
         code = await proc.wait()
         if not self._stopping and self._proc is proc:
-            recent = "\n".join(tail)
+            tail = self._read_log_tail()
             log.error(
                 "server exited unexpectedly with code %s (see %s)%s",
                 code, self.log_path,
-                f"\n--- last output ---\n{recent}" if recent else " — no output captured",
+                f"\n--- last output ---\n{tail}" if tail else " — no output captured",
             )
             self._proc = None
             self.started_at = None
             await self.bus.emit(
-                "server_exited", code=code, tail=recent, log_path=str(self.log_path)
+                "server_exited", code=code, tail=tail, log_path=str(self.log_path)
             )
+
+    def _read_log_tail(self, n_lines: int = 25, max_bytes: int = 65536) -> str:
+        """Last few non-blank lines of the current session log."""
+        if not self.log_path:
+            return ""
+        try:
+            with open(self.log_path, "rb") as f:
+                f.seek(0, 2)
+                f.seek(max(0, f.tell() - max_bytes))
+                chunk = f.read()
+        except OSError:
+            return ""
+        lines = [ln for ln in chunk.decode("utf-8", "replace").splitlines() if ln.strip()]
+        return "\n".join(lines[-n_lines:])
