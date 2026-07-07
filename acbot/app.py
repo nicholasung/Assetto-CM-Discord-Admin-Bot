@@ -61,16 +61,44 @@ class FileServer:
         return web.FileResponse(fpath)
 
     async def _package(self, folder: Path) -> Path:
-        """Zip `folder` into cache_dir, clearing any previously hosted zip first."""
-        async with self._zip_lock:
-            self._clear_cache()
-            archive = await asyncio.to_thread(
-                shutil.make_archive, str(self.cache_dir / folder.name), "zip", root_dir=folder
-            )
-            return Path(archive)
+        """Zip `folder` on demand, reusing a cached zip when one is already built.
 
-    def _clear_cache(self) -> None:
+        A browser download of one file opens several parallel / range requests;
+        without this each would re-zip the whole folder and hammer the loop. We
+        build a folder's zip once, reuse it for every follow-up request, and keep
+        only the most recent folder's zip so the cache dir never grows.
+        """
+        target = self.cache_dir / f"{folder.name}.zip"
+        if self._zip_is_fresh(target, folder):
+            return target
+        async with self._zip_lock:
+            # Re-check inside the lock: a concurrent request may have built it.
+            if self._zip_is_fresh(target, folder):
+                return target
+            self._clear_cache(keep=target)
+            tmp_base = self.cache_dir / f".{folder.name}.building"
+            archive = await asyncio.to_thread(
+                shutil.make_archive, str(tmp_base), "zip", root_dir=folder
+            )
+            try:
+                Path(archive).replace(target)
+            except OSError:
+                # Target is locked (an earlier zip is still downloading) — serve
+                # the fresh build directly; it gets cleaned on the next request.
+                return Path(archive)
+            return target
+
+    @staticmethod
+    def _zip_is_fresh(zip_path: Path, folder: Path) -> bool:
+        try:
+            return zip_path.stat().st_mtime >= folder.stat().st_mtime
+        except OSError:
+            return False
+
+    def _clear_cache(self, keep: Path | None = None) -> None:
         for stale in self.cache_dir.glob("*.zip"):
+            if keep is not None and stale == keep:
+                continue
             try:
                 stale.unlink()
             except OSError:
@@ -173,6 +201,15 @@ class App:
             cache_dir=self.cfg.downloads_cache_dir,
         )
         await self.file_server.start()
+        # Warm the car/track index off the loop so the first autocomplete is
+        # instant instead of triggering a multi-second scan on the event loop.
+        self._content_warm = asyncio.create_task(self._warm_content())
+
+    async def _warm_content(self) -> None:
+        try:
+            await self.content.ensure_loaded()
+        except Exception:
+            log.exception("content index warm-up failed")
 
     async def shutdown(self) -> None:
         self.listener.close()

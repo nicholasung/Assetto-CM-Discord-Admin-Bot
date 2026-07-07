@@ -17,160 +17,105 @@ class DownloadsCog(commands.GroupCog, group_name="download",
         self.bot = bot
         self.app = bot.app
         super().__init__()
-    
+
+    # -- autocomplete (must stay instant: reads the warmed cache only) --------
+
     async def _car_autocomplete(self, interaction: discord.Interaction,
                                 current: str) -> list[app_commands.Choice]:
-        """Autocomplete for car names."""
         cars = self.app.content.search(current, limit=20)
-        return [app_commands.Choice(name=car.label, value=car.car_id) for car in cars]
-    
+        return [app_commands.Choice(name=car.label[:100], value=car.car_id) for car in cars]
+
     async def _track_autocomplete(self, interaction: discord.Interaction,
                                   current: str) -> list[app_commands.Choice]:
-        """Autocomplete for track names (scan tracks folder)."""
-        tracks_dir = self.app.cfg.paths.ac_root / "content" / "tracks"
-        if not tracks_dir.is_dir():
-            return []
-        
-        matches = []
         query = current.lower()
-        for track_dir in sorted(tracks_dir.iterdir()):
-            if track_dir.is_dir() and not track_dir.name.startswith("."):
-                if query in track_dir.name.lower():
-                    matches.append(app_commands.Choice(
-                        name=track_dir.name,
-                        value=track_dir.name
-                    ))
-        
-        return matches[:20]
-    
+        matches = [t for t in self.app.content.all_tracks() if query in t.lower()]
+        return [app_commands.Choice(name=t[:100], value=t) for t in matches[:20]]
+
+    # -- lists ----------------------------------------------------------------
+
     @app_commands.command(name="cars", description="List all available cars")
     async def list_cars(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        await self.app.content.ensure_loaded()
         cars = self.app.content.all_cars()
         if not cars:
-            await interaction.response.send_message("No cars found.", ephemeral=True)
+            await interaction.edit_original_response(content="No cars found.")
             return
-        
-        # Split into chunks of 20 cars per message (to avoid hitting message length limit)
+
+        # 20 cars per message (message length limit); overflow goes in a thread.
         chunk_size = 20
         chunks = [cars[i:i + chunk_size] for i in range(0, len(cars), chunk_size)]
-        
-        # Send first message as response, create thread if multiple chunks
-        first_chunk = chunks[0]
         lines = ["**Available Cars:**\n"]
-        for car in first_chunk:
-            lines.append(f"• `{car.car_id}` — {car.display_name}")
-        
-        msg = await interaction.response.send_message("\n".join(lines))
-        
-        # If there are more chunks, create a thread and send them there
+        lines += [f"• `{car.car_id}` — {car.display_name}" for car in chunks[0]]
+        msg = await interaction.edit_original_response(content="\n".join(lines))
+
         if len(chunks) > 1:
             thread = await msg.create_thread(name="Car List")
-            
-            # Send remaining chunks in the thread
             for chunk in chunks[1:]:
-                lines = []
-                for car in chunk:
-                    lines.append(f"• `{car.car_id}` — {car.display_name}")
-                await thread.send("\n".join(lines))
-            
-            # Send instruction in the thread
+                await thread.send("\n".join(
+                    f"• `{car.car_id}` — {car.display_name}" for car in chunk))
             await thread.send("Use `/download car <name>` to get a download link.")
-    
+
     @app_commands.command(name="tracks", description="List all available tracks")
     async def list_tracks(self, interaction: discord.Interaction) -> None:
-        tracks_dir = self.app.cfg.paths.ac_root / "content" / "tracks"
-        if not tracks_dir.is_dir():
-            await interaction.response.send_message("Tracks folder not found.", ephemeral=True)
-            return
-        
-        # Scan tracks
-        tracks = sorted([
-            d.name for d in tracks_dir.iterdir()
-            if d.is_dir() and not d.name.startswith(".")
-        ])
-        
+        await interaction.response.defer(thinking=True)
+        await self.app.content.ensure_loaded()
+        tracks = self.app.content.all_tracks()
         if not tracks:
-            await interaction.response.send_message("No tracks found.", ephemeral=True)
+            await interaction.edit_original_response(content="No tracks found.")
             return
-        
-        # Split into chunks of 25 tracks per message
+
         chunk_size = 25
         chunks = [tracks[i:i + chunk_size] for i in range(0, len(tracks), chunk_size)]
-        
-        # Send first message as response, create thread if multiple chunks
-        first_chunk = chunks[0]
         lines = ["**Available Tracks:**\n"]
-        for track in first_chunk:
-            lines.append(f"• `{track}`")
-        
-        msg = await interaction.response.send_message("\n".join(lines))
-        
-        # If there are more chunks, create a thread and send them there
+        lines += [f"• `{track}`" for track in chunks[0]]
+        msg = await interaction.edit_original_response(content="\n".join(lines))
+
         if len(chunks) > 1:
             thread = await msg.create_thread(name="Track List")
-            
-            # Send remaining chunks in the thread
             for chunk in chunks[1:]:
-                lines = []
-                for track in chunk:
-                    lines.append(f"• `{track}`")
-                await thread.send("\n".join(lines))
-            
-            # Send instruction in the thread
+                await thread.send("\n".join(f"• `{track}`" for track in chunk))
             await thread.send("Use `/download track <name>` to get a download link.")
-    
+
+    # -- download links -------------------------------------------------------
+
     @app_commands.command(name="car", description="Get download link for a car")
     @app_commands.autocomplete(name=_car_autocomplete)
     async def download_car(self, interaction: discord.Interaction, name: str) -> None:
+        await interaction.response.defer(thinking=True)
+        await self.app.content.ensure_loaded()
         car = self.app.content.get(name)
         if not car:
-            await interaction.response.send_message(
-                f"Car `{name}` not found. Use `/download cars` to see available cars.",
-                ephemeral=True
-            )
+            await interaction.edit_original_response(
+                content=f"Car `{name}` not found. Use `/download cars` to see available cars.")
             return
-        
         if not self.app.public_ip:
-            await interaction.response.send_message(
-                "Download server not ready (no public IP).",
-                ephemeral=True
-            )
+            await interaction.edit_original_response(
+                content="Download server not ready (no public IP).")
             return
-        
-        # Build the download link
+
         url = f"http://{self.app.public_ip}:8082/downloads/cars/{car.car_id}"
-        
         embed = discord.Embed(title=car.label, color=discord.Color.green())
         embed.add_field(name="Download", value=f"[Click here]({url})", inline=False)
         embed.set_footer(text="Extract to your Assetto Corsa content/cars folder")
-        
-        await interaction.response.send_message(embed=embed)
-    
+        await interaction.edit_original_response(embed=embed)
+
     @app_commands.command(name="track", description="Get download link for a track")
     @app_commands.autocomplete(name=_track_autocomplete)
     async def download_track(self, interaction: discord.Interaction, name: str) -> None:
-        tracks_dir = self.app.cfg.paths.ac_root / "content" / "tracks"
-        track_path = tracks_dir / name
-        
-        if not track_path.is_dir():
-            await interaction.response.send_message(
-                f"Track `{name}` not found. Use `/download tracks` to see available tracks.",
-                ephemeral=True
-            )
+        await interaction.response.defer(thinking=True)
+        await self.app.content.ensure_loaded()
+        if name not in self.app.content.all_tracks():
+            await interaction.edit_original_response(
+                content=f"Track `{name}` not found. Use `/download tracks` to see available tracks.")
             return
-        
         if not self.app.public_ip:
-            await interaction.response.send_message(
-                "Download server not ready (no public IP).",
-                ephemeral=True
-            )
+            await interaction.edit_original_response(
+                content="Download server not ready (no public IP).")
             return
-        
-        # Build the download link
+
         url = f"http://{self.app.public_ip}:8082/downloads/tracks/{name}"
-        
         embed = discord.Embed(title=name, color=discord.Color.green())
         embed.add_field(name="Download", value=f"[Click here]({url})", inline=False)
         embed.set_footer(text="Extract to your Assetto Corsa content/tracks folder")
-        
-        await interaction.response.send_message(embed=embed)
+        await interaction.edit_original_response(embed=embed)
