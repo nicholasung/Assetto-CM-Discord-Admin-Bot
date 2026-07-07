@@ -154,6 +154,29 @@ class Staging:
 
     # -- edits (each returns a short old->new description for the audit log)
 
+    def allowed_cars(self) -> list[str]:
+        """Models in server_cfg.ini's [SERVER] CARS list (the server's allow-list)."""
+        raw = self.server_cfg().get("SERVER", "CARS", "") or ""
+        return [c.strip() for c in raw.split(";") if c.strip()]
+
+    def ensure_car_allowed(self, model: str) -> bool:
+        """Add `model` to the [SERVER] CARS allow-list if missing.
+
+        The AC server validates every entry's MODEL against CARS and refuses to
+        start ("car X is illegal") when one is absent — so a car swap has to
+        touch server_cfg.ini too, not just entry_list.ini (Content Manager does
+        both). Append-only: never drops a car another slot or pickup mode allows.
+        Returns True when it had to add the model.
+        """
+        cfg = self.server_cfg()
+        cars = [c.strip() for c in (cfg.get("SERVER", "CARS", "") or "").split(";") if c.strip()]
+        if any(c.lower() == model.lower() for c in cars):
+            return False
+        cars.append(model)
+        cfg.set("SERVER", "CARS", ";".join(cars))
+        cfg.save(self.server_cfg_path)
+        return True
+
     def set_entry_car(self, slot: int, model: str, skin: str) -> str:
         el = self.entry_list()
         section = f"CAR_{slot}"
@@ -164,7 +187,9 @@ class Staging:
         el.set(section, "MODEL", model)
         el.set(section, "SKIN", skin)
         el.save(self.entry_list_path)
-        return f"slot {slot}: {old_model} [{old_skin}] → {model} [{skin}]"
+        added = self.ensure_car_allowed(model)
+        note = "  (added to allowed cars)" if added else ""
+        return f"slot {slot}: {old_model} [{old_skin}] → {model} [{skin}]{note}"
 
     def set_entry_skin(self, slot: int, skin: str) -> str:
         el = self.entry_list()

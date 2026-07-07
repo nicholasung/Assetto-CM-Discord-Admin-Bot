@@ -59,6 +59,23 @@ def test_set_entry_car_only_touches_target(staging: Staging, presets_dir: Path):
     assert original.get("CAR_1", "MODEL") == "ks_mazda_mx5_cup"
 
 
+def test_set_entry_car_adds_to_allowed_cars(staging: Staging):
+    # Fresh model not in server_cfg CARS: the server would call it "illegal"
+    # unless we also add it to the allow-list.
+    assert "lotus_elise_sc" not in staging.allowed_cars()
+    desc = staging.set_entry_car(1, "lotus_elise_sc", "")
+    assert "added to allowed cars" in desc
+    assert "lotus_elise_sc" in staging.allowed_cars()
+
+
+def test_set_entry_car_existing_model_not_duplicated(staging: Staging):
+    before = staging.allowed_cars()
+    assert "abarth500" in before  # already allowed by the preset
+    desc = staging.set_entry_car(1, "abarth500", "stripes")
+    assert "added to allowed cars" not in desc
+    assert staging.allowed_cars() == before  # no duplicate appended
+
+
 def test_set_entry_skin_and_missing_slot(staging: Staging):
     staging.set_entry_skin(0, "blue")
     assert staging.entry(0).skin == "blue"
