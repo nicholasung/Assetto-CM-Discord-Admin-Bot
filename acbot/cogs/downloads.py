@@ -11,6 +11,11 @@ from discord.ext import commands
 if TYPE_CHECKING:
     from ..bot import ACBot
 
+
+def _batched(items: list[str], size: int) -> list[list[str]]:
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
 class DownloadsCog(commands.GroupCog, group_name="download",
                    group_description="Download AC content"):
     def __init__(self, bot: ACBot):
@@ -41,20 +46,9 @@ class DownloadsCog(commands.GroupCog, group_name="download",
         if not cars:
             await interaction.edit_original_response(content="No cars found.")
             return
-
-        # 20 cars per message (message length limit); overflow goes in a thread.
-        chunk_size = 20
-        chunks = [cars[i:i + chunk_size] for i in range(0, len(cars), chunk_size)]
-        lines = ["**Available Cars:**\n"]
-        lines += [f"• `{car.car_id}` — {car.display_name}" for car in chunks[0]]
-        msg = await interaction.edit_original_response(content="\n".join(lines))
-
-        if len(chunks) > 1:
-            thread = await msg.create_thread(name="Car List")
-            for chunk in chunks[1:]:
-                await thread.send("\n".join(
-                    f"• `{car.car_id}` — {car.display_name}" for car in chunk))
-            await thread.send("Use `/download car <name>` to get a download link.")
+        lines = [f"• `{car.car_id}` — {car.display_name}" for car in cars]
+        await self._post_list(interaction, "Cars", "Car List", lines,
+                              "Use `/download car <name>` to get a download link.")
 
     @app_commands.command(name="tracks", description="List all available tracks")
     async def list_tracks(self, interaction: discord.Interaction) -> None:
@@ -64,18 +58,27 @@ class DownloadsCog(commands.GroupCog, group_name="download",
         if not tracks:
             await interaction.edit_original_response(content="No tracks found.")
             return
+        lines = [f"• `{track}`" for track in tracks]
+        await self._post_list(interaction, "Tracks", "Track List", lines,
+                              "Use `/download track <name>` to get a download link.")
 
-        chunk_size = 25
-        chunks = [tracks[i:i + chunk_size] for i in range(0, len(tracks), chunk_size)]
-        lines = ["**Available Tracks:**\n"]
-        lines += [f"• `{track}`" for track in chunks[0]]
-        msg = await interaction.edit_original_response(content="\n".join(lines))
-
-        if len(chunks) > 1:
-            thread = await msg.create_thread(name="Track List")
-            for chunk in chunks[1:]:
-                await thread.send("\n".join(f"• `{track}`" for track in chunk))
-            await thread.send("Use `/download track <name>` to get a download link.")
+    async def _post_list(self, interaction: discord.Interaction, label: str,
+                         thread_name: str, lines: list[str], footer: str) -> None:
+        """Keep the channel tidy: post a one-line header, then drop the full
+        list into a thread (batched to stay under Discord's message limit)."""
+        header = await interaction.edit_original_response(
+            content=f"**Available {label} ({len(lines)})** — full list in the thread below 👇")
+        try:
+            thread = await header.create_thread(name=thread_name)
+        except discord.HTTPException:
+            # No thread permission / not a threadable channel — fall back inline.
+            await header.edit(content=f"**Available {label} ({len(lines)})**")
+            for batch in _batched(lines, 20):
+                await interaction.followup.send("\n".join(batch))
+            return
+        for batch in _batched(lines, 20):
+            await thread.send("\n".join(batch))
+        await thread.send(footer)
 
     # -- download links -------------------------------------------------------
 

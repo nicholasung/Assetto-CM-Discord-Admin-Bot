@@ -22,6 +22,11 @@ discord:
   # null to log to file only.
   audit_channel_id: null
 
+  # Optional: channel where car uploads (from the /upload link page) post an
+  # approve/reject prompt. One admin's approval installs the car; leave null
+  # to disable the prompt (uploads are still held but nobody is notified).
+  upload_channel_id: null
+
 paths:
   # Full Assetto Corsa install (the bot reads content\cars\<car>\skins\<skin>
   # from here for car/skin options).

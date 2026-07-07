@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from .ac.backends.assettoserver import AssettoServerBackend
 from .ac.backends.base import BackendError, ServerBackend
@@ -16,6 +19,7 @@ from .ac.presets import resolve_presets_dir
 from .ac.process import ProcessError, ServerProcess, StrayProcessError
 from .ac.staging import Staging
 from .ac.udp import AcspListener
+from .ac.uploads import PendingUpload, UploadError, UploadStore
 from .config import ASSETTOSERVER, Config
 from .events import EventBus
 from .leaderboard.db import LeaderboardDB
@@ -27,13 +31,34 @@ log = logging.getLogger(__name__)
 
 from aiohttp import web
 
+# Cap per uploaded car zip; the request body limit adds headroom for multipart.
+UPLOAD_MAX_BYTES = 600 * 1024 * 1024  # 600 MB
+
+
+class _UploadTooLarge(Exception):
+    pass
+
+
 class FileServer:
     """Serves AC content over HTTP. Folders are zipped on demand; only the
-    most recently requested zip is kept on disk so the cache dir never grows."""
+    most recently requested zip is kept on disk so the cache dir never grows.
 
-    def __init__(self, host: str, port: int, root_dir: Path, cache_dir: Path):
-        self.app = web.Application()
+    When an `upload_store` is provided it also hosts a static upload page
+    (GET/POST /upload) that parks a car zip for admin approval (see UploadStore);
+    each accepted upload fires `on_upload` so the bot can prompt in Discord."""
+
+    def __init__(self, host: str, port: int, root_dir: Path, cache_dir: Path,
+                 upload_store: UploadStore | None = None,
+                 on_upload: Callable[[PendingUpload], Awaitable[None]] | None = None,
+                 max_upload_bytes: int = UPLOAD_MAX_BYTES):
+        self.uploads = upload_store
+        self.on_upload = on_upload
+        self.max_upload_bytes = max_upload_bytes
+        self.app = web.Application(client_max_size=max_upload_bytes + 16 * 1024 * 1024)
         self.app.router.add_get('/downloads/{filename:.+}', self._serve_file)
+        if upload_store is not None:
+            self.app.router.add_get('/upload', self._upload_form)
+            self.app.router.add_post('/upload', self._handle_upload)
         self.runner = None
         self.site = None
         self.root = root_dir.resolve()
@@ -104,6 +129,63 @@ class FileServer:
             except OSError:
                 log.warning("could not remove stale zip %s (still being downloaded?)", stale)
 
+    # -- uploads (parked for admin approval) ---------------------------------
+
+    async def _upload_form(self, request: web.Request) -> web.Response:
+        return web.Response(
+            text=_upload_page(ok=request.query.get("ok"), err=request.query.get("err")),
+            content_type="text/html",
+        )
+
+    async def _handle_upload(self, request: web.Request) -> web.StreamResponse:
+        assert self.uploads is not None
+        try:
+            reader = await request.multipart()
+        except Exception:
+            return web.HTTPFound("/upload?err=Malformed+upload.")
+
+        field = await reader.next()
+        while field is not None and not (field.name == "file" and field.filename):
+            field = await reader.next()
+        if field is None or not field.filename:
+            return web.HTTPFound("/upload?err=No+file+selected.")
+        if not field.filename.lower().endswith(".zip"):
+            return web.HTTPFound("/upload?err=Please+upload+a+.zip+file.")
+
+        self.uploads.dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.uploads.dir / f".incoming-{time.time_ns():x}.zip"
+        try:
+            size = 0
+            with open(tmp, "wb") as f:
+                while chunk := await field.read_chunk():
+                    size += len(chunk)
+                    if size > self.max_upload_bytes:
+                        raise _UploadTooLarge()
+                    f.write(chunk)
+            pending = await asyncio.to_thread(self.uploads.save, tmp, field.filename)
+        except _UploadTooLarge:
+            self._safe_unlink(tmp)
+            return web.HTTPFound("/upload?err=File+too+large.")
+        except UploadError as e:
+            self._safe_unlink(tmp)
+            return web.HTTPFound(f"/upload?err={quote_plus(str(e))}")
+        finally:
+            self._safe_unlink(tmp)  # save() renamed it on success; no-op then
+
+        if self.on_upload is not None:
+            try:
+                await self.on_upload(pending)
+            except Exception:
+                log.exception("failed to notify Discord of the pending upload")
+        return web.HTTPFound("/upload?ok=1")
+
+    @staticmethod
+    def _safe_unlink(path: Path) -> None:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
     async def start(self) -> None:
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
@@ -116,6 +198,47 @@ class FileServer:
             await self.runner.cleanup()
         self._clear_cache()
 
+
+def _upload_page(ok: str | None = None, err: str | None = None) -> str:
+    if ok:
+        banner = ('<div class="note ok">✅ Upload received. An admin has been asked '
+                  'to approve the install in Discord.</div>')
+    elif err:
+        from html import escape
+        banner = f'<div class="note err">⚠️ {escape(err)}</div>'
+    else:
+        banner = ""
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upload a car</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  body {{ font-family: system-ui, sans-serif; margin: 0; min-height: 100vh;
+         display: grid; place-items: center; background: #14161a; color: #e8eaed; }}
+  .card {{ width: min(92vw, 460px); background: #1e2127; border: 1px solid #2c313a;
+          border-radius: 14px; padding: 28px; box-shadow: 0 8px 30px rgba(0,0,0,.35); }}
+  h1 {{ font-size: 1.3rem; margin: 0 0 4px; }}
+  p.sub {{ margin: 0 0 20px; color: #a5abb5; font-size: .92rem; line-height: 1.4; }}
+  input[type=file] {{ width: 100%; padding: 14px; border: 1px dashed #3a4150;
+          border-radius: 10px; background: #171a20; color: #e8eaed; box-sizing: border-box; }}
+  button {{ margin-top: 16px; width: 100%; padding: 12px; border: 0; border-radius: 10px;
+          background: #3b82f6; color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer; }}
+  button:hover {{ background: #2f6fe0; }}
+  .note {{ padding: 12px 14px; border-radius: 10px; margin-bottom: 18px; font-size: .9rem; }}
+  .note.ok {{ background: #12331f; border: 1px solid #1f6b3a; }}
+  .note.err {{ background: #33161a; border: 1px solid #6b2530; }}
+</style></head>
+<body><form class="card" method="post" action="/upload" enctype="multipart/form-data">
+  {banner}
+  <h1>Upload a car</h1>
+  <p class="sub">Pick a car mod <code>.zip</code>. It won't go live until an admin
+    approves it in Discord — until then only the most recent upload is kept.</p>
+  <input type="file" name="file" accept=".zip" required>
+  <button type="submit">Upload for approval</button>
+</form></body></html>"""
+
+
 class App:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -124,6 +247,10 @@ class App:
         self.state = BotState(cfg.state_path)
         self.staging = Staging(cfg.staging_dir)
         self.content = ContentIndex(cfg.paths.ac_root)
+        self.uploads = UploadStore(
+            cfg.pending_upload_dir,
+            (cfg.paths.ac_root / "content" / "cars") if cfg.paths.ac_root else None,
+        )
         self.process = ServerProcess(cfg, self.bus)
         self.db = LeaderboardDB(cfg.db_path)
         self.listener = AcspListener(
@@ -199,6 +326,8 @@ class App:
             port=8082,
             root_dir=self.cfg.paths.ac_root / "content",
             cache_dir=self.cfg.downloads_cache_dir,
+            upload_store=self.uploads,
+            on_upload=self._on_car_uploaded,
         )
         await self.file_server.start()
         # Warm the car/track index off the loop so the first autocomplete is
@@ -210,6 +339,10 @@ class App:
             await self.content.ensure_loaded()
         except Exception:
             log.exception("content index warm-up failed")
+
+    async def _on_car_uploaded(self, pending: PendingUpload) -> None:
+        # Fan the HTTP upload out to the bot (UploadsCog posts the approval prompt).
+        await self.bus.emit("car_uploaded", pending=pending)
 
     async def shutdown(self) -> None:
         self.listener.close()

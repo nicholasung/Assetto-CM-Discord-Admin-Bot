@@ -16,6 +16,9 @@ roles — can control the server without ever touching the VM:
 - **Damage & collisions** (`/settings damage 0-100`, `/settings collisions`)
 - **Time of day** (`/settings time HH:MM`)
 - **Join links** (`/join`) — `acstuff.club` links that open Content Manager
+- **Download & upload content** (`/download`, `/upload link`) — hand out zip
+  links for installed cars/tracks, and let anyone upload a car via a web page
+  that installs only after one admin approves it in Discord
 - **Auto-updating status message** (`/status pin`) — who's online, track,
   session, join button; refreshes continuously
 - **Local leaderboard** (`/lb top|me|recent|link`) — best clean laps per
@@ -177,6 +180,10 @@ nssm start acbot
 | `/settings time <HH:MM>` | Sun angle (vanilla) / live console (AS) | admin roles |
 | `/join` | Content Manager join link | everyone |
 | `/status pin` | (Re)create the auto-updating status message | admin roles |
+| `/download cars` / `tracks` | List installed content (posts the full list in a thread) | everyone |
+| `/download car <name>` / `track <name>` | Get a zip download link for one item | everyone |
+| `/upload link` | Link to the upload page for adding a car | everyone |
+| `/upload pending` | Re-post the approve/reject prompt for the held upload | admin roles |
 | `/lb top <car> [track]` | Best clean lap per driver for the combo | everyone |
 | `/lb me` | Your personal bests (after `/lb link`) | everyone |
 | `/lb recent` | Latest recorded laps | everyone |

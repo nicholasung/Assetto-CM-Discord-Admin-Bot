@@ -25,6 +25,7 @@ class DiscordConfig:
     admin_role_ids: list[int] = field(default_factory=list)
     status_channel_id: int | None = None
     audit_channel_id: int | None = None
+    upload_channel_id: int | None = None
 
 
 @dataclass
@@ -94,6 +95,10 @@ class Config:
     def downloads_cache_dir(self) -> Path:
         return self.data_dir / "downloads_cache"
 
+    @property
+    def pending_upload_dir(self) -> Path:
+        return self.data_dir / "pending_upload"
+
     def token(self) -> str:
         tok = os.environ.get(TOKEN_ENV, "").strip()
         if not tok:
@@ -101,7 +106,8 @@ class Config:
         return tok
 
     def ensure_dirs(self) -> None:
-        for d in (self.data_dir, self.staging_dir, self.logs_dir, self.downloads_cache_dir):
+        for d in (self.data_dir, self.staging_dir, self.logs_dir,
+                  self.downloads_cache_dir, self.pending_upload_dir):
             d.mkdir(parents=True, exist_ok=True)
 
 
@@ -140,6 +146,7 @@ def load_config(path: Path | str) -> Config:
             admin_role_ids=[int(r) for r in (d.get("admin_role_ids") or [])],
             status_channel_id=_opt_int(d.get("status_channel_id")),
             audit_channel_id=_opt_int(d.get("audit_channel_id")),
+            upload_channel_id=_opt_int(d.get("upload_channel_id")),
         ),
         paths=PathsConfig(
             ac_root=_opt_path(p.get("ac_root")),

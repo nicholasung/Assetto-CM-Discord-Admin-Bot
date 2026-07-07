@@ -51,10 +51,11 @@ class ACBot(commands.Bot):
         from .cogs.server import ServerCog
         from .cogs.settings import SettingsCog
         from .cogs.status import StatusCog
+        from .cogs.uploads import UploadsCog
 
         await self.app.startup()
         for cog_cls in (ServerCog, PresetsCog, EntriesCog, SettingsCog,
-                        StatusCog, LeaderboardCog, DownloadsCog):
+                        StatusCog, LeaderboardCog, DownloadsCog, UploadsCog):
             await self.add_cog(cog_cls(self))
         await self.app.autostart_if_configured()
 
