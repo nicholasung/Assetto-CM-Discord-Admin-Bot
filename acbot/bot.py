@@ -44,16 +44,18 @@ class ACBot(commands.Bot):
         self.app = app
 
     async def setup_hook(self) -> None:
+        from .cogs.downloads import DownloadsCog
         from .cogs.entries import EntriesCog
         from .cogs.leaderboard import LeaderboardCog
         from .cogs.presets import PresetsCog
         from .cogs.server import ServerCog
         from .cogs.settings import SettingsCog
         from .cogs.status import StatusCog
+        from .cogs.uploads import UploadsCog
 
         await self.app.startup()
         for cog_cls in (ServerCog, PresetsCog, EntriesCog, SettingsCog,
-                        StatusCog, LeaderboardCog):
+                        StatusCog, LeaderboardCog, DownloadsCog, UploadsCog):
             await self.add_cog(cog_cls(self))
         await self.app.autostart_if_configured()
 

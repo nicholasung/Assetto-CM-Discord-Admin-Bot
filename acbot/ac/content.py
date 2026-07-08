@@ -7,6 +7,7 @@ Manager runs there.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -44,24 +45,40 @@ def _read_display_name(car_dir: Path) -> str:
 
 
 class ContentIndex:
-    """Lazy, mtime-cached view of <ac_root>/content/cars."""
+    """mtime-cached view of <ac_root>/content cars + tracks.
+
+    The disk scan (hundreds of cars, each with a ui_car.json parse) is far too
+    heavy for Discord's ~3s autocomplete budget, so it never runs on the event
+    loop: `ensure_loaded()` warms the caches in a worker thread and queries just
+    read the in-memory result. `acbot doctor` (no bot loop) scans inline.
+    """
 
     def __init__(self, ac_root: Path | None):
         self.ac_root = ac_root
         self._cars: dict[str, Car] = {}
-        self._mtime: float | None = None
+        self._cars_mtime: float | None = None
+        self._tracks: list[str] = []
+        self._tracks_mtime: float | None = None
+        self._lock = asyncio.Lock()
+        self._loading = False
 
     @property
     def cars_dir(self) -> Path | None:
         return self.ac_root / "content" / "cars" if self.ac_root else None
 
-    def refresh(self, force: bool = False) -> None:
+    @property
+    def tracks_dir(self) -> Path | None:
+        return self.ac_root / "content" / "tracks" if self.ac_root else None
+
+    # -- scanning (heavy; kept off the event loop via ensure_loaded) ---------
+
+    def _scan_cars(self, force: bool = False) -> None:
         cars_dir = self.cars_dir
         if cars_dir is None or not cars_dir.is_dir():
             self._cars = {}
             return
         mtime = cars_dir.stat().st_mtime
-        if not force and self._mtime == mtime and self._cars:
+        if not force and self._cars_mtime == mtime and self._cars:
             return
         cars: dict[str, Car] = {}
         for car_dir in sorted(cars_dir.iterdir()):
@@ -80,14 +97,52 @@ class ContentIndex:
                 skins=skins,
             )
         self._cars = cars
-        self._mtime = mtime
+        self._cars_mtime = mtime
         log.info("content index: %d cars under %s", len(cars), cars_dir)
 
-    # -- queries -----------------------------------------------------------
+    def _scan_tracks(self, force: bool = False) -> None:
+        tracks_dir = self.tracks_dir
+        if tracks_dir is None or not tracks_dir.is_dir():
+            self._tracks = []
+            return
+        mtime = tracks_dir.stat().st_mtime
+        if not force and self._tracks_mtime == mtime and self._tracks:
+            return
+        names = sorted(
+            d.name for d in tracks_dir.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        )
+        self._tracks = names
+        self._tracks_mtime = mtime
+        log.info("content index: %d tracks under %s", len(names), tracks_dir)
+
+    async def ensure_loaded(self, force: bool = False) -> None:
+        """Warm the car + track caches in a worker thread (mtime-cached)."""
+        async with self._lock:
+            self._loading = True
+            try:
+                await asyncio.to_thread(self._scan_cars, force)
+                await asyncio.to_thread(self._scan_tracks, force)
+            finally:
+                self._loading = False
+
+    def refresh(self, force: bool = False) -> None:
+        # Query-facing: while a warm holds the cache, don't scan on the event
+        # loop — serve what's cached. `acbot doctor` has no warm, so it scans.
+        if self._loading and not force:
+            return
+        self._scan_cars(force)
+
+    # -- queries (cheap: read the warmed cache) ------------------------------
 
     def all_cars(self) -> list[Car]:
         self.refresh()
         return list(self._cars.values())
+
+    def all_tracks(self) -> list[str]:
+        if not self._loading:
+            self._scan_tracks()
+        return list(self._tracks)
 
     def get(self, car_id: str) -> Car | None:
         self.refresh()

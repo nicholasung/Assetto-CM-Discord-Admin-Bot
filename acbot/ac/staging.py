@@ -154,6 +154,36 @@ class Staging:
 
     # -- edits (each returns a short old->new description for the audit log)
 
+    def allowed_cars(self) -> list[str]:
+        """Models in server_cfg.ini's [SERVER] CARS list (the server's allow-list)."""
+        raw = self.server_cfg().get("SERVER", "CARS", "") or ""
+        return [c.strip() for c in raw.split(";") if c.strip()]
+
+    def sync_allowed_cars(self) -> list[str]:
+        """Rewrite [SERVER] CARS to exactly the distinct entry-list models (slot order).
+
+        Two failure modes hang off CARS drifting from the entry list, and
+        Content Manager avoids both by keeping them identical:
+          * a model in the entry list but missing from CARS → the server refuses
+            to start ("car X is illegal");
+          * a model left in CARS with no slot using it → CM greys the car out
+            with no entry count, and the server logs "checksum: Folder not found".
+        So mirror CM: CARS = the set of models currently slotted. Returns it.
+        """
+        models: list[str] = []
+        seen: set[str] = set()
+        for entry in self.entries():
+            key = entry.model.lower()
+            if entry.model and key not in seen:
+                seen.add(key)
+                models.append(entry.model)
+        cfg = self.server_cfg()
+        current = [c.strip() for c in (cfg.get("SERVER", "CARS", "") or "").split(";") if c.strip()]
+        if {c.lower() for c in current} != seen or not current:
+            cfg.set("SERVER", "CARS", ";".join(models))
+            cfg.save(self.server_cfg_path)
+        return models
+
     def set_entry_car(self, slot: int, model: str, skin: str) -> str:
         el = self.entry_list()
         section = f"CAR_{slot}"
@@ -164,6 +194,7 @@ class Staging:
         el.set(section, "MODEL", model)
         el.set(section, "SKIN", skin)
         el.save(self.entry_list_path)
+        self.sync_allowed_cars()
         return f"slot {slot}: {old_model} [{old_skin}] → {model} [{skin}]"
 
     def set_entry_skin(self, slot: int, skin: str) -> str:
