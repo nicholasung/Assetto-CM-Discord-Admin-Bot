@@ -8,7 +8,15 @@ import logging.handlers
 import sys
 from pathlib import Path
 
-from .config import Config, ConfigError, load_config, validate_for_run
+from .config import (
+    Config,
+    ConfigError,
+    load_config,
+    validate_for_run,
+    validate_for_web,
+)
+
+log = logging.getLogger("acbot")
 
 
 def setup_logging(cfg: Config, verbose: bool = False) -> None:
@@ -54,10 +62,44 @@ def cmd_run(cfg: Config) -> int:
     return 0
 
 
+def cmd_web(cfg: Config) -> int:
+    """Run only the admin web UI (no Discord). Shares the same App backend."""
+    import asyncio
+
+    problems = validate_for_web(cfg)
+    if problems:
+        print("Cannot start the web UI — fix these first:", file=sys.stderr)
+        for p in problems:
+            print(f"  ✗ {p}", file=sys.stderr)
+        return 1
+
+    from .app import App
+
+    async def _serve() -> None:
+        app = App(cfg)
+        await app.startup()
+        if app.web_server is None:
+            raise ConfigError("web.enabled is false — set it to true to run `acbot web`.")
+        log.info("web UI ready; press Ctrl+C to stop")
+        try:
+            await asyncio.Event().wait()  # run until interrupted
+        finally:
+            await app.shutdown()
+
+    try:
+        asyncio.run(_serve())
+    except (KeyboardInterrupt, ConfigError) as e:
+        if isinstance(e, ConfigError):
+            print(f"Config error: {e}", file=sys.stderr)
+            return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="acbot",
                                      description="Assetto Corsa Discord admin bot")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "doctor"])
+    parser.add_argument("command", nargs="?", default="run",
+                        choices=["run", "doctor", "web"])
     parser.add_argument("--config", default="config.yaml",
                         help="path to config.yaml (default: ./config.yaml)")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -74,6 +116,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "doctor":
         from .doctor import run_doctor
         return run_doctor(cfg)
+    if args.command == "web":
+        return cmd_web(cfg)
     return cmd_run(cfg)
 
 

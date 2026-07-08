@@ -9,6 +9,7 @@ from pathlib import Path
 import yaml
 
 TOKEN_ENV = "ACBOT_DISCORD_TOKEN"
+WEB_PASSWORD_ENV = "ACBOT_WEB_PASSWORD"
 
 VANILLA = "vanilla"
 ASSETTOSERVER = "assettoserver"
@@ -63,11 +64,36 @@ class AssettoServerConfig:
 
 
 @dataclass
+class WebConfig:
+    """Password-protected admin web UI (see acbot/web/)."""
+
+    enabled: bool = True
+    host: str = "0.0.0.0"
+    port: int = 8090
+    # Password fallback; the ACBOT_WEB_PASSWORD env var takes precedence.
+    password: str | None = None
+    # Failed logins before an IP is banned, and how long the ban lasts.
+    max_attempts: int = 3
+    ban_hours: int = 24
+    # Extra IPs that can never be banned (loopback is always exempt).
+    never_ban: list[str] = field(default_factory=list)
+    # How long a successful login stays signed in.
+    session_hours: int = 12
+    # Serve over HTTPS. Provide tls_cert + tls_key (PEM) to use your own
+    # certificate; leave them null to auto-generate a self-signed one in the
+    # data dir on first run (needs the 'cryptography' package).
+    tls: bool = False
+    tls_cert: str | None = None
+    tls_key: str | None = None
+
+
+@dataclass
 class Config:
     discord: DiscordConfig = field(default_factory=DiscordConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     assettoserver: AssettoServerConfig = field(default_factory=AssettoServerConfig)
+    web: WebConfig = field(default_factory=WebConfig)
     base_dir: Path = Path(".")
 
     @property
@@ -99,11 +125,36 @@ class Config:
     def pending_upload_dir(self) -> Path:
         return self.data_dir / "pending_upload"
 
+    @property
+    def web_bans_path(self) -> Path:
+        return self.data_dir / "web_bans.txt"
+
+    @property
+    def web_cert_path(self) -> Path:
+        return self.data_dir / "web_cert.pem"
+
+    @property
+    def web_key_path(self) -> Path:
+        return self.data_dir / "web_key.pem"
+
+    def resolve_path(self, value: str) -> Path:
+        """Resolve a possibly-relative config path against the config's dir."""
+        p = Path(value)
+        return p if p.is_absolute() else self.base_dir / p
+
     def token(self) -> str:
         tok = os.environ.get(TOKEN_ENV, "").strip()
         if not tok:
             raise ConfigError(f"Discord token missing: set the {TOKEN_ENV} environment variable")
         return tok
+
+    def web_password(self) -> str | None:
+        """The web UI password: ACBOT_WEB_PASSWORD env var, else web.password."""
+        env = os.environ.get(WEB_PASSWORD_ENV, "").strip()
+        if env:
+            return env
+        pw = (self.web.password or "").strip()
+        return pw or None
 
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.staging_dir, self.logs_dir,
@@ -123,6 +174,12 @@ def _opt_path(value) -> Path | None:
     return Path(str(value))
 
 
+def _opt_str(value) -> str | None:
+    if value in (None, "", "null"):
+        return None
+    return str(value).strip() or None
+
+
 def load_config(path: Path | str) -> Config:
     path = Path(path)
     if not path.exists():
@@ -139,6 +196,7 @@ def load_config(path: Path | str) -> Config:
     p = raw.get("paths") or {}
     s = raw.get("server") or {}
     a = raw.get("assettoserver") or {}
+    w = raw.get("web") or {}
 
     cfg = Config(
         discord=DiscordConfig(
@@ -167,6 +225,20 @@ def load_config(path: Path | str) -> Config:
         assettoserver=AssettoServerConfig(
             collisions_yaml_key=a.get("collisions_yaml_key") or None,
             settime_console_template=a.get("settime_console_template") or None,
+        ),
+        web=WebConfig(
+            enabled=bool(w.get("enabled", True)),
+            host=str(w.get("host") or "0.0.0.0"),
+            port=int(w.get("port") or 8090),
+            password=(str(w["password"]).strip() or None
+                      if w.get("password") not in (None, "", "null") else None),
+            max_attempts=int(w.get("max_attempts") or 3),
+            ban_hours=int(w.get("ban_hours") or 24),
+            never_ban=[str(x) for x in (w.get("never_ban") or [])],
+            session_hours=int(w.get("session_hours") or 12),
+            tls=bool(w.get("tls") or False),
+            tls_cert=_opt_str(w.get("tls_cert")),
+            tls_key=_opt_str(w.get("tls_key")),
         ),
         base_dir=path.resolve().parent,
     )
@@ -201,4 +273,33 @@ def validate_for_run(cfg: Config) -> list[str]:
             problems.append(f"AssettoServer executable not found in {ad}")
     if not os.environ.get(TOKEN_ENV):
         problems.append(f"{TOKEN_ENV} environment variable is not set")
+    return problems
+
+
+def validate_for_web(cfg: Config) -> list[str]:
+    """Blocking problems for `acbot web` (the standalone web UI, no Discord)."""
+    problems: list[str] = []
+    if not cfg.web_password():
+        problems.append(
+            f"No web password set — set the {WEB_PASSWORD_ENV} environment variable "
+            "(or web.password in config.yaml)"
+        )
+    if not cfg.paths.ac_root:
+        problems.append("paths.ac_root is not set (needed for car/track content + downloads)")
+    if cfg.server.backend == VANILLA:
+        sd = cfg.paths.server_dir
+        if not sd:
+            problems.append("paths.server_dir is not set")
+        elif not (sd / "acServer.exe").exists() and not (sd / "acServer").exists():
+            problems.append(f"acServer executable not found in {sd}")
+    else:
+        ad = cfg.paths.assettoserver_dir
+        if not ad:
+            problems.append("paths.assettoserver_dir is not set (backend=assettoserver)")
+        elif not (ad / "AssettoServer.exe").exists() and not (ad / "AssettoServer").exists():
+            problems.append(f"AssettoServer executable not found in {ad}")
+    from .web.tls import tls_preflight
+    tls_problem = tls_preflight(cfg)
+    if tls_problem:
+        problems.append(tls_problem)
     return problems

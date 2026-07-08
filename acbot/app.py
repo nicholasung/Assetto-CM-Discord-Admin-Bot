@@ -263,6 +263,7 @@ class App:
         self._backend: ServerBackend | None = None
         self.ingest: LapIngest | None = None
         self.public_ip: str | None = None
+        self.web_server = None  # started in startup() when web is enabled
         self.bus.subscribe("server_started", self._on_server_started)
 
     # -- services ------------------------------------------------------------
@@ -330,9 +331,31 @@ class App:
             on_upload=self._on_car_uploaded,
         )
         await self.file_server.start()
+        await self._start_web()
         # Warm the car/track index off the loop so the first autocomplete is
         # instant instead of triggering a multi-second scan on the event loop.
         self._content_warm = asyncio.create_task(self._warm_content())
+
+    async def _start_web(self) -> None:
+        """Start the admin web UI when enabled and a password is configured."""
+        if not self.cfg.web.enabled:
+            return
+        password = self.cfg.web_password()
+        if not password:
+            log.warning("web UI enabled but no password set — skipping it "
+                        "(set ACBOT_WEB_PASSWORD or web.password to enable)")
+            return
+        from .web.server import WebServer
+        from .web.tls import WebTLSError
+        server = WebServer(self, self.cfg, password)
+        try:
+            await server.start()
+        except WebTLSError:
+            # Never serve the admin UI in the clear when HTTPS was requested but
+            # is misconfigured — leave it off (bot keeps running) and log why.
+            log.exception("web UI not started: TLS is misconfigured")
+            return
+        self.web_server = server
 
     async def _warm_content(self) -> None:
         try:
@@ -348,6 +371,8 @@ class App:
         self.listener.close()
         await self.db.close()
         await self.file_server.stop()
+        if self.web_server is not None:
+            await self.web_server.stop()
 
     async def autostart_if_configured(self) -> None:
         """Launch the AC server on bot boot if server.autostart is set.

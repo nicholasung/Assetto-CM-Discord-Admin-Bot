@@ -193,6 +193,68 @@ Leaderboard rules: only clean laps (0 cuts) count; drivers are identified by
 Steam GUID, so changing entry slot or skin never splits or resets anyone's
 times.
 
+## Web UI
+
+A password-protected admin web page exposes most of the bot's functionality
+without Discord's limitations (no slash-command timeouts, no thread juggling for
+long lists). It's a second front end onto the *same* backend — the same staged
+config, the same live server process, the same content cache — so anything you
+do in it shows up in Discord and vice-versa.
+
+It shows live server status + entry list, the installed cars/tracks with
+one-click download links (plus a search box), the CM presets, and lets you
+start/stop/restart, apply presets, edit entry slots, change damage/time/
+collisions, and approve car uploads.
+
+Set a password (env var preferred) and it starts automatically with the bot:
+
+```powershell
+setx ACBOT_WEB_PASSWORD "some-strong-password"   # then open a NEW terminal
+```
+
+Then open `http://<vm-ip>:8090` (forward the port for remote access). Tune the
+`web:` block in `config.yaml` for host/port/lockout. To run the web UI **without**
+the Discord bot at all:
+
+```powershell
+python -m acbot web
+```
+
+**Login protection.** Three failed logins block that IP for 24 hours (both
+configurable). Blocks are recorded in `data\web_bans.txt` — a plain text file you
+can edit on the host: delete a line (or set its time in the past) to lift a block,
+no restart needed. **Loopback (`127.0.0.1` / `::1`) is never blocked**, so you can
+never lock yourself out from the machine itself. The block keys off the real
+connecting address, not a spoofable header, so `never_ban`/loopback exemptions
+can't be forged.
+
+**Plain HTTP by default.** The UI runs over HTTP unless you turn TLS on. Sniffing
+requires being on the network path between a legitimate user and the server — a
+stranger who never got the link isn't on that path and can't intercept traffic
+just by finding the port. What actually keeps randoms out is the login wall
+itself (a strong password + the 3-strikes/24h lockout above), which works the
+same regardless of HTTP vs HTTPS. Where HTTP falls short is if *you* ever connect
+from an untrusted network (public Wi-Fi, a compromised router) — there, an
+on-path attacker really could intercept the password/session. If that's a
+concern, don't just turn on self-signed TLS (it adds a browser warning for every
+device); prefer one of, in order of least friction:
+
+- **A private network** — bind `web.host: 127.0.0.1` and reach it over a VPN
+  (e.g. Tailscale) or an SSH tunnel instead of forwarding 8090 publicly.
+  Strangers can't route to it at all; no cert warning, ever.
+- **A real certificate** — point a domain or free dynamic-DNS name at the VM and
+  get a Let's Encrypt cert (`web.tls_cert` / `web.tls_key`). Zero warning, full
+  encryption, needs a domain.
+- **Self-signed TLS** (`web.tls: true` with `tls_cert`/`tls_key` left null) —
+  encrypted, but each device shows a one-time trust warning until you install
+  the generated cert into its trust store.
+
+With TLS on, the session cookie is flagged `Secure` and the site is served at
+`https://<vm-ip>:8090`; if it's misconfigured the web UI simply doesn't start
+rather than falling back to plaintext (reason logged to `data\logs\acbot.log`).
+The content download server (port 8082) is unaffected either way — it serves
+public files with no credentials.
+
 ## AssettoServer backend
 
 Set `server.backend: assettoserver` and `paths.assettoserver_dir`. The bot

@@ -9,6 +9,9 @@ dependencies = [
     "aiosqlite>=0.20",
     "psutil>=5.9",
     "PyYAML>=6.0",
+    # Only used to auto-generate a self-signed cert for the web UI when HTTPS is
+    # on and you haven't supplied your own tls_cert/tls_key.
+    "cryptography>=41",
 ]
 
 [project.optional-dependencies]
