@@ -56,6 +56,10 @@ class FileServer:
         self.max_upload_bytes = max_upload_bytes
         self.app = web.Application(client_max_size=max_upload_bytes + 16 * 1024 * 1024)
         self.app.router.add_get('/downloads/{filename:.+}', self._serve_file)
+        # Landing page + its polling endpoint (see _download_page). The Discord
+        # links point at /get/... so the browser never hangs on a cold zip build.
+        self.app.router.add_get('/get/{path:.+}', self._download_page)
+        self.app.router.add_get('/prepare/{path:.+}', self._prepare_status)
         if upload_store is not None:
             self.app.router.add_get('/upload', self._upload_form)
             self.app.router.add_post('/upload', self._handle_upload)
@@ -67,15 +71,21 @@ class FileServer:
         self.host = host
         self.port = port
         self._zip_lock = asyncio.Lock()
+        # Folder path -> in-flight background zip build, so the landing page can
+        # poll build status without kicking off a duplicate build each time.
+        self._builds: dict[str, asyncio.Task] = {}
 
-    async def _serve_file(self, request: web.Request) -> web.FileResponse:
-        filename = request.match_info['filename']
-        fpath = (self.root / filename).resolve()
-
+    def _resolve(self, path: str) -> Path:
+        """Resolve a content-relative path, refusing to escape the content root."""
+        fpath = (self.root / path).resolve()
         try:
             fpath.relative_to(self.root)
         except ValueError:
             raise web.HTTPForbidden()
+        return fpath
+
+    async def _serve_file(self, request: web.Request) -> web.FileResponse:
+        fpath = self._resolve(request.match_info['filename'])
 
         if not fpath.exists():
             raise web.HTTPNotFound()
@@ -84,6 +94,54 @@ class FileServer:
             fpath = await self._package(fpath)
 
         return web.FileResponse(fpath)
+
+    # -- download landing page ------------------------------------------------
+
+    async def _download_page(self, request: web.Request) -> web.Response:
+        """HTML page shown by the Discord link: names the content, shows a
+        "preparing…" spinner, and reveals a download button once the zip is
+        built. The heavy lifting happens on /prepare, which the page polls."""
+        path = request.match_info['path']
+        fpath = self._resolve(path)
+        if not fpath.exists():
+            raise web.HTTPNotFound(text="That content is no longer available.")
+        name = request.query.get("name") or fpath.name
+        return web.Response(text=_download_page(name, path), content_type="text/html")
+
+    async def _prepare_status(self, request: web.Request) -> web.Response:
+        """Report (and, on first call, kick off) the zip build for `path`.
+
+        Returns JSON {status: ready|building|error|missing}. A single file needs
+        no packaging and is ready immediately; a folder is zipped in the
+        background so the poll returns quickly while the build runs."""
+        path = request.match_info['path']
+        fpath = self._resolve(path)
+        if not fpath.exists():
+            return web.json_response({"status": "missing"}, status=404)
+
+        if fpath.is_file():
+            return web.json_response(
+                {"status": "ready", "size": _human_size(fpath.stat().st_size)})
+
+        target = self.cache_dir / f"{fpath.name}.zip"
+        if self._zip_is_fresh(target, fpath):
+            return web.json_response(
+                {"status": "ready", "size": _human_size(target.stat().st_size)})
+
+        key = str(fpath)
+        task = self._builds.get(key)
+        if task is not None and task.done():
+            self._builds.pop(key, None)
+            if (exc := task.exception()) is not None:
+                log.error("failed to package %s for download: %r", fpath, exc)
+                return web.json_response({"status": "error"})
+            # Built successfully — the fresh-zip check above catches this on the
+            # next poll, but report ready now that the archive exists.
+            return web.json_response(
+                {"status": "ready", "size": _human_size(task.result().stat().st_size)})
+        if task is None:
+            self._builds[key] = asyncio.create_task(self._package(fpath))
+        return web.json_response({"status": "building"})
 
     async def _package(self, folder: Path) -> Path:
         """Zip `folder` on demand, reusing a cached zip when one is already built.
@@ -197,6 +255,84 @@ class FileServer:
         if self.runner:
             await self.runner.cleanup()
         self._clear_cache()
+
+
+def _human_size(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{n} B"  # unreachable, keeps type checkers happy
+
+
+def _download_page(name: str, path: str) -> str:
+    import json
+    from html import escape
+
+    safe_name = escape(name)
+    # json.dumps yields a safe JS string literal for the raw (un-encoded) path;
+    # the page URL-encodes each segment before fetching.
+    path_json = json.dumps(path)
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download · {safe_name}</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  body {{ font-family: system-ui, sans-serif; margin: 0; min-height: 100vh;
+         display: grid; place-items: center; background: #14161a; color: #e8eaed; }}
+  .card {{ width: min(92vw, 460px); background: #1e2127; border: 1px solid #2c313a;
+          border-radius: 14px; padding: 28px; box-shadow: 0 8px 30px rgba(0,0,0,.35);
+          text-align: center; }}
+  h1 {{ font-size: 1.15rem; margin: 0 0 6px; color: #a5abb5; font-weight: 600; }}
+  .name {{ font-size: 1.25rem; font-weight: 700; margin: 0 0 24px; word-break: break-word; }}
+  .status {{ display: flex; align-items: center; justify-content: center; gap: 12px;
+            color: #a5abb5; font-size: .95rem; }}
+  .spinner {{ width: 20px; height: 20px; border: 3px solid #2c313a; border-top-color: #3b82f6;
+            border-radius: 50%; animation: spin .8s linear infinite; }}
+  @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+  .btn {{ display: block; text-decoration: none; padding: 14px; border-radius: 10px;
+          background: #3b82f6; color: #fff; font-size: 1rem; font-weight: 600; }}
+  .btn:hover {{ background: #2f6fe0; }}
+  .note {{ padding: 12px 14px; border-radius: 10px; font-size: .9rem;
+          background: #33161a; border: 1px solid #6b2530; }}
+</style></head>
+<body><div class="card">
+  <h1>Preparing your download</h1>
+  <p class="name">{safe_name}</p>
+  <div id="status" class="status"><div class="spinner"></div><span>Packaging files…</span></div>
+  <a id="dl" class="btn" download style="display:none">Download</a>
+  <div id="err" class="note" style="display:none">Something went wrong preparing this
+    download. Refresh the page to try again.</div>
+</div>
+<script>
+  const path = {path_json};
+  const encoded = path.split('/').map(encodeURIComponent).join('/');
+  const statusEl = document.getElementById('status');
+  const dl = document.getElementById('dl');
+  const err = document.getElementById('err');
+  async function poll() {{
+    try {{
+      const data = await (await fetch('/prepare/' + encoded)).json();
+      if (data.status === 'ready') {{
+        statusEl.style.display = 'none';
+        dl.href = '/downloads/' + encoded;
+        dl.textContent = data.size ? 'Download (' + data.size + ')' : 'Download';
+        dl.style.display = 'block';
+        return;
+      }}
+      if (data.status === 'error' || data.status === 'missing') {{
+        statusEl.style.display = 'none';
+        err.style.display = 'block';
+        return;
+      }}
+    }} catch (e) {{ /* transient — keep polling */ }}
+    setTimeout(poll, 1500);
+  }}
+  poll();
+</script>
+</body></html>"""
 
 
 def _upload_page(ok: str | None = None, err: str | None = None) -> str:
