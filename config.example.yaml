@@ -97,10 +97,30 @@ web:
   host: 0.0.0.0
   port: 8090
 
+  # Login method: "password" (one shared password) or "discord" (each visitor
+  # logs in with Discord and is let in only if they're a member of the server
+  # in discord.guild_id — no shared password to leak, and access revokes itself
+  # when someone leaves the server).
+  auth: password
+
+  # --- auth: password ---
   # The single shared password. Prefer the ACBOT_WEB_PASSWORD environment
   # variable (this file is readable by anyone with file access); this is only a
   # fallback. Leave null and set the env var instead.
   password: null
+
+  # --- auth: discord ---
+  # From your Discord application (https://discord.com/developers/applications):
+  # OAuth2 → Client ID + Client Secret, and add a redirect of
+  #   http(s)://<your-host>:8090/auth/discord/callback
+  # under OAuth2 → Redirects. The guild checked is discord.guild_id above.
+  discord_client_id: null
+  # Prefer the ACBOT_WEB_DISCORD_SECRET env var over putting the secret here.
+  discord_client_secret: null
+  # Usually leave null — it's derived from the request. Set it only if the
+  # auto-derived URL wouldn't match the redirect you registered on Discord
+  # (e.g. behind a proxy/domain): e.g. https://acbot.example.com/auth/discord/callback
+  discord_redirect_uri: null
 
   # Lockout: after this many failed logins an IP is banned for ban_hours. The
   # ban list is data/web_bans.txt — delete a line there to lift a ban (no

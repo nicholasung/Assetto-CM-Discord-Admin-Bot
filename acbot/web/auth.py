@@ -161,7 +161,8 @@ class WebAuth:
         self.ban_hours = ban_hours
         self._session_ttl = timedelta(hours=max(1, session_hours))
         self._fails: dict[str, int] = {}
-        self._sessions: dict[str, datetime] = {}
+        # token -> (expiry, who) where `who` is a display label for the audit log.
+        self._sessions: dict[str, tuple[datetime, str]] = {}
 
     # -- ban / attempt state -------------------------------------------------
 
@@ -197,24 +198,33 @@ class WebAuth:
 
     # -- sessions ------------------------------------------------------------
 
-    def start_session(self, ip: str) -> str:
-        """Clear failures for `ip` and mint a session token."""
+    def start_session(self, ip: str, who: str = "") -> str:
+        """Clear failures for `ip` and mint a session token tagged with `who`."""
         self._fails.pop(ip, None)
         token = secrets.token_urlsafe(32)
-        self._sessions[token] = datetime.now() + self._session_ttl
+        self._sessions[token] = (datetime.now() + self._session_ttl, who)
         self._sweep()
         return token
 
     def valid_session(self, token: str | None) -> bool:
         if not token:
             return False
-        expiry = self._sessions.get(token)
-        if expiry is None:
+        entry = self._sessions.get(token)
+        if entry is None:
             return False
-        if datetime.now() >= expiry:
+        if datetime.now() >= entry[0]:
             self._sessions.pop(token, None)
             return False
         return True
+
+    def session_who(self, token: str | None) -> str | None:
+        """The display label a valid session was created with (for auditing)."""
+        if not token:
+            return None
+        entry = self._sessions.get(token)
+        if entry is None or datetime.now() >= entry[0]:
+            return None
+        return entry[1] or None
 
     def end_session(self, token: str | None) -> None:
         if token:
@@ -222,5 +232,5 @@ class WebAuth:
 
     def _sweep(self) -> None:
         now = datetime.now()
-        for tok in [t for t, exp in self._sessions.items() if now >= exp]:
+        for tok in [t for t, (exp, _who) in self._sessions.items() if now >= exp]:
             self._sessions.pop(tok, None)

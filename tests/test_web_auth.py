@@ -134,7 +134,9 @@ def test_session_invalid_and_logout(bans_path):
 
 def test_session_expiry(bans_path):
     auth = WebAuth(password="pw", bans_path=bans_path, session_hours=1)
-    token = auth.start_session("203.0.113.23")
+    token = auth.start_session("203.0.113.23", who="ada")
+    assert auth.session_who(token) == "ada"
     # Force the stored expiry into the past.
-    auth._sessions[token] = datetime.now() - timedelta(seconds=1)
+    auth._sessions[token] = (datetime.now() - timedelta(seconds=1), "ada")
     assert not auth.valid_session(token)
+    assert auth.session_who(token) is None

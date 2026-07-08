@@ -10,10 +10,16 @@ import yaml
 
 TOKEN_ENV = "ACBOT_DISCORD_TOKEN"
 WEB_PASSWORD_ENV = "ACBOT_WEB_PASSWORD"
+WEB_DISCORD_SECRET_ENV = "ACBOT_WEB_DISCORD_SECRET"
 
 VANILLA = "vanilla"
 ASSETTOSERVER = "assettoserver"
 BACKENDS = (VANILLA, ASSETTOSERVER)
+
+# Web login methods.
+AUTH_PASSWORD = "password"
+AUTH_DISCORD = "discord"
+WEB_AUTHS = (AUTH_PASSWORD, AUTH_DISCORD)
 
 
 class ConfigError(Exception):
@@ -65,13 +71,23 @@ class AssettoServerConfig:
 
 @dataclass
 class WebConfig:
-    """Password-protected admin web UI (see acbot/web/)."""
+    """Admin web UI (see acbot/web/). Login is either a shared password or
+    Discord OAuth (verifies the visitor is a member of the configured guild)."""
 
     enabled: bool = True
     host: str = "0.0.0.0"
     port: int = 8090
+    # "password" (shared password) or "discord" (Discord OAuth guild-membership).
+    auth: str = AUTH_PASSWORD
     # Password fallback; the ACBOT_WEB_PASSWORD env var takes precedence.
     password: str | None = None
+    # Discord OAuth (auth = "discord"). The guild checked for membership is
+    # discord.guild_id. The secret prefers the ACBOT_WEB_DISCORD_SECRET env var.
+    discord_client_id: str | None = None
+    discord_client_secret: str | None = None
+    # OAuth redirect URL registered on the Discord app. Leave null to derive it
+    # from the incoming request (scheme://host/auth/discord/callback).
+    discord_redirect_uri: str | None = None
     # Failed logins before an IP is banned, and how long the ban lasts.
     max_attempts: int = 3
     ban_hours: int = 24
@@ -156,6 +172,21 @@ class Config:
         pw = (self.web.password or "").strip()
         return pw or None
 
+    def web_discord_secret(self) -> str | None:
+        """OAuth client secret: ACBOT_WEB_DISCORD_SECRET env, else config."""
+        env = os.environ.get(WEB_DISCORD_SECRET_ENV, "").strip()
+        if env:
+            return env
+        secret = (self.web.discord_client_secret or "").strip()
+        return secret or None
+
+    def web_auth_ready(self) -> bool:
+        """Whether the configured web login method has what it needs to run."""
+        if self.web.auth == AUTH_DISCORD:
+            return bool(self.discord.guild_id and self.web.discord_client_id
+                        and self.web_discord_secret())
+        return bool(self.web_password())
+
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.staging_dir, self.logs_dir,
                   self.downloads_cache_dir, self.pending_upload_dir):
@@ -230,8 +261,12 @@ def load_config(path: Path | str) -> Config:
             enabled=bool(w.get("enabled", True)),
             host=str(w.get("host") or "0.0.0.0"),
             port=int(w.get("port") or 8090),
+            auth=str(w.get("auth") or AUTH_PASSWORD).lower(),
             password=(str(w["password"]).strip() or None
                       if w.get("password") not in (None, "", "null") else None),
+            discord_client_id=_opt_str(w.get("discord_client_id")),
+            discord_client_secret=_opt_str(w.get("discord_client_secret")),
+            discord_redirect_uri=_opt_str(w.get("discord_redirect_uri")),
             max_attempts=int(w.get("max_attempts") or 3),
             ban_hours=int(w.get("ban_hours") or 24),
             never_ban=[str(x) for x in (w.get("never_ban") or [])],
@@ -245,6 +280,8 @@ def load_config(path: Path | str) -> Config:
 
     if cfg.server.backend not in BACKENDS:
         raise ConfigError(f"server.backend must be one of {BACKENDS}, got {cfg.server.backend!r}")
+    if cfg.web.auth not in WEB_AUTHS:
+        raise ConfigError(f"web.auth must be one of {WEB_AUTHS}, got {cfg.web.auth!r}")
     try:
         cfg.server.udp_listen_port  # noqa: B018 - validates the host:port format
     except (ValueError, IndexError) as e:
@@ -277,9 +314,19 @@ def validate_for_run(cfg: Config) -> list[str]:
 
 
 def validate_for_web(cfg: Config) -> list[str]:
-    """Blocking problems for `acbot web` (the standalone web UI, no Discord)."""
+    """Blocking problems for `acbot web` (the standalone web UI, no bot)."""
     problems: list[str] = []
-    if not cfg.web_password():
+    if cfg.web.auth == AUTH_DISCORD:
+        if not cfg.discord.guild_id:
+            problems.append("discord.guild_id must be set (web.auth=discord checks membership of it)")
+        if not cfg.web.discord_client_id:
+            problems.append("web.discord_client_id is not set (web.auth=discord)")
+        if not cfg.web_discord_secret():
+            problems.append(
+                f"Discord OAuth client secret missing: set the {WEB_DISCORD_SECRET_ENV} "
+                "environment variable (or web.discord_client_secret)"
+            )
+    elif not cfg.web_password():
         problems.append(
             f"No web password set — set the {WEB_PASSWORD_ENV} environment variable "
             "(or web.password in config.yaml)"

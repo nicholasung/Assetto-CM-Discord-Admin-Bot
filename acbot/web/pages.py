@@ -58,11 +58,20 @@ th { color:var(--mut); font-weight:600; }
 .field { margin-bottom:12px; }
 code { background:#0e1013; padding:1px 5px; border-radius:5px; font-size:.86em; }
 .small { font-size:.82rem; }
+a.btn { display:block; text-align:center; text-decoration:none; }
+a.btn.discord { background:#5865F2; }
+a.btn.discord:hover { background:#4752c4; }
 """
 
 
-def login_page(*, error: str | None = None, attempts_left: int | None = None,
+def login_page(*, mode: str = "password", error: str | None = None,
+               attempts_left: int | None = None,
                banned_until: datetime | None = None) -> str:
+    discord = mode == "discord"
+    subtitle = (
+        "Need to ensure you are in the Discord server to use the server config "
+        "page. Please log in." if discord else "Enter the shared admin password."
+    )
     if banned_until is not None:
         banner = (f'<div class="note err">Too many failed attempts. This address is '
                   f'blocked until <b>{escape(banned_until.strftime("%Y-%m-%d %H:%M"))}</b>. '
@@ -75,7 +84,10 @@ def login_page(*, error: str | None = None, attempts_left: int | None = None,
             if attempts_left is not None:
                 extra = f" {attempts_left} attempt(s) left before this address is blocked."
             banner = f'<div class="note err">{escape(error)}{escape(extra)}</div>'
-        form = """
+        if discord:
+            form = '<a class="btn discord" href="/auth/discord/login">Log in with Discord</a>'
+        else:
+            form = """
         <form method="post" action="/login">
           <div class="field">
             <label for="password">Password</label>
@@ -90,7 +102,7 @@ body {{ display:grid; place-items:center; min-height:100vh; }}
 .card {{ width:min(92vw,400px); }}</style></head>
 <body><div class="card">
   <h1>Assetto Corsa admin</h1>
-  <p class="mut small">Enter the shared admin password.</p>
+  <p class="mut small">{subtitle}</p>
   {banner}{form}
 </div></body></html>"""
 

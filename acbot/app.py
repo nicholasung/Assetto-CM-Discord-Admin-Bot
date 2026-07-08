@@ -337,17 +337,21 @@ class App:
         self._content_warm = asyncio.create_task(self._warm_content())
 
     async def _start_web(self) -> None:
-        """Start the admin web UI when enabled and a password is configured."""
+        """Start the admin web UI when enabled and its login method is ready."""
         if not self.cfg.web.enabled:
             return
-        password = self.cfg.web_password()
-        if not password:
-            log.warning("web UI enabled but no password set — skipping it "
-                        "(set ACBOT_WEB_PASSWORD or web.password to enable)")
+        if not self.cfg.web_auth_ready():
+            if self.cfg.web.auth == "discord":
+                log.warning("web UI enabled but Discord OAuth isn't configured — skipping it "
+                            "(need discord.guild_id, web.discord_client_id and "
+                            "ACBOT_WEB_DISCORD_SECRET/web.discord_client_secret)")
+            else:
+                log.warning("web UI enabled but no password set — skipping it "
+                            "(set ACBOT_WEB_PASSWORD or web.password to enable)")
             return
         from .web.server import WebServer
         from .web.tls import WebTLSError
-        server = WebServer(self, self.cfg, password)
+        server = WebServer(self, self.cfg)
         try:
             await server.start()
         except WebTLSError:

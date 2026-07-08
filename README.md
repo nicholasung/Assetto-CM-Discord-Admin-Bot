@@ -206,27 +206,48 @@ one-click download links (plus a search box), the CM presets, and lets you
 start/stop/restart, apply presets, edit entry slots, change damage/time/
 collisions, and approve car uploads.
 
-Set a password (env var preferred) and it starts automatically with the bot:
-
-```powershell
-setx ACBOT_WEB_PASSWORD "some-strong-password"   # then open a NEW terminal
-```
-
-Then open `http://<vm-ip>:8090` (forward the port for remote access). Tune the
-`web:` block in `config.yaml` for host/port/lockout. To run the web UI **without**
-the Discord bot at all:
+It starts automatically with the bot once a login method is configured (below),
+and you can run it **without** the Discord bot at all:
 
 ```powershell
 python -m acbot web
 ```
 
-**Login protection.** Three failed logins block that IP for 24 hours (both
-configurable). Blocks are recorded in `data\web_bans.txt` — a plain text file you
-can edit on the host: delete a line (or set its time in the past) to lift a block,
-no restart needed. **Loopback (`127.0.0.1` / `::1`) is never blocked**, so you can
-never lock yourself out from the machine itself. The block keys off the real
-connecting address, not a spoofable header, so `never_ban`/loopback exemptions
-can't be forged.
+Open `http://<vm-ip>:8090` (forward the port for remote access). Tune the `web:`
+block in `config.yaml` for host/port/lockout.
+
+**Login: choose one method (`web.auth`).**
+
+*Discord (`auth: discord`) — recommended:* visitors log in with Discord and are
+let in only if they're a member of your server (`discord.guild_id`). No shared
+password to leak, and access self-revokes when someone leaves the server. Set it
+up once in the [Discord developer portal](https://discord.com/developers/applications)
+under **OAuth2**: copy the **Client ID**, add a **redirect** of
+`http://<vm-ip>:8090/auth/discord/callback`, then:
+
+```powershell
+setx ACBOT_WEB_DISCORD_SECRET "your-oauth2-client-secret"   # then a NEW terminal
+```
+```yaml
+web:
+  auth: discord
+  discord_client_id: "123456789012345678"
+```
+
+*Password (`auth: password`, the default):* one shared password, env var preferred:
+
+```powershell
+setx ACBOT_WEB_PASSWORD "some-strong-password"   # then open a NEW terminal
+```
+
+**Lockout (both methods).** Three failed logins block that IP for 24 hours (in
+Discord mode, "failed" = authenticated but not a member of the server). Blocks
+are recorded in `data\web_bans.txt` — a plain text file you can edit on the host:
+delete a line (or set its time in the past) to lift a block, no restart needed.
+**Loopback (`127.0.0.1` / `::1`) is never blocked**, so you can never lock
+yourself out from the machine itself. The block keys off the real connecting
+address, not a spoofable header, so `never_ban`/loopback exemptions can't be
+forged.
 
 **Plain HTTP by default.** The UI runs over HTTP unless you turn TLS on. Sniffing
 requires being on the network path between a legitimate user and the server — a

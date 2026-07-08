@@ -3,8 +3,10 @@
 Runs in the same process as everything else (started from App.startup, or
 standalone via `acbot web`) so it shares the live server process, the ACSP
 roster and the staged config — the web UI and the Discord bot are just two
-front ends onto one App. Every request passes the auth middleware first
-(see auth.py): banned IPs are refused, everything but /login needs a session.
+front ends onto one App. Every request passes the auth middleware first (see
+auth.py): banned IPs are refused, and everything but the login/OAuth endpoints
+needs a valid session. Login is either a shared password or Discord OAuth
+(auth = "discord"), which only lets in members of the configured guild.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import secrets
 import time
 from typing import TYPE_CHECKING
 from urllib.parse import quote
@@ -22,10 +25,11 @@ from ..ac.backends.base import BackendError, NotSupportedError
 from ..ac.process import CooldownError, ProcessError, StrayProcessError
 from ..ac.staging import StagingError
 from ..ac.uploads import UploadError
-from ..config import Config
+from ..config import AUTH_DISCORD, Config
 from ..leaderboard.queries import fmt_laptime, recent_laps
 from ..util import fmt_duration, parse_hhmm
 from .auth import WebAuth
+from .discord_auth import DiscordAuthError, build_authorize_url, exchange_and_identify
 from .pages import banned_page, dashboard_page, login_page
 from .tls import build_ssl_context
 
@@ -52,12 +56,14 @@ def _safe_unlink(path) -> None:
 
 class WebServer:
     COOKIE = "acbot_session"
+    STATE_COOKIE = "acbot_oauth_state"
 
-    def __init__(self, app: App, cfg: Config, password: str):
+    def __init__(self, app: App, cfg: Config):
         self.app = app
         self.cfg = cfg
+        self.mode = cfg.web.auth
         self.auth = WebAuth(
-            password=password,
+            password=cfg.web_password(),  # None in discord mode; check_password stays False
             bans_path=cfg.web_bans_path,
             max_attempts=cfg.web.max_attempts,
             ban_hours=cfg.web.ban_hours,
@@ -77,12 +83,15 @@ class WebServer:
     def _make_middleware(self):
         server = self
 
+        public = ("/login", "/favicon.ico",
+                  "/auth/discord/login", "/auth/discord/callback")
+
         @web.middleware
         async def _mw(request: web.Request, handler):
             ip = request.remote or ""
             if server.auth.is_banned(ip):
                 return server._blocked(request)
-            if request.path in ("/login", "/favicon.ico"):
+            if request.path in public:
                 return await handler(request)
             if not server.auth.valid_session(request.cookies.get(server.COOKIE)):
                 if request.path.startswith("/api/"):
@@ -98,8 +107,10 @@ class WebServer:
         r.add_get("/", self._dashboard)
         r.add_get("/login", self._login_get)
         r.add_post("/login", self._login_post)
+        r.add_get("/auth/discord/login", self._discord_login)
+        r.add_get("/auth/discord/callback", self._discord_callback)
         r.add_post("/logout", self._logout)
-        r.add_get("/favicon.ico", lambda _req: web.Response(status=204))
+        r.add_get("/favicon.ico", self._favicon)
         r.add_get("/api/status", self._api_status)
         r.add_get("/api/entries", self._api_entries)
         r.add_get("/api/presets", self._api_presets)
@@ -146,7 +157,14 @@ class WebServer:
         return data if isinstance(data, dict) else {}
 
     def _audit(self, request: web.Request, action: str) -> None:
-        audit_log.info("%s (web) | %s", request.remote or "?", action)
+        who = self.auth.session_who(request.cookies.get(self.COOKIE))
+        actor = f"{who} @ {request.remote}" if who else (request.remote or "?")
+        audit_log.info("%s (web) | %s", actor, action)
+
+    def _set_session_cookie(self, resp: web.Response, token: str) -> None:
+        resp.set_cookie(self.COOKIE, token, httponly=True, samesite="Lax",
+                        secure=self.cfg.web.tls,
+                        max_age=self.cfg.web.session_hours * 3600, path="/")
 
     def _download_base(self, request: web.Request) -> str:
         host = self.app.public_ip
@@ -163,36 +181,105 @@ class WebServer:
 
     # -- pages / auth --------------------------------------------------------
 
+    async def _favicon(self, _request: web.Request) -> web.Response:
+        return web.Response(status=204)
+
     async def _dashboard(self, _request: web.Request) -> web.Response:
         return web.Response(text=dashboard_page(), content_type="text/html")
 
     async def _login_get(self, request: web.Request) -> web.Response:
         if self.auth.valid_session(request.cookies.get(self.COOKIE)):
             return web.HTTPFound("/")
-        return web.Response(text=login_page(), content_type="text/html")
+        return web.Response(text=login_page(mode=self.mode), content_type="text/html")
 
     async def _login_post(self, request: web.Request) -> web.Response:
+        # Only the shared-password mode has a form to post; Discord mode logs in
+        # via the OAuth redirect and has no password to submit.
+        if self.mode == AUTH_DISCORD:
+            return web.HTTPFound("/login")
         ip = request.remote or ""
         form = await request.post()
         password = str(form.get("password") or "")
         if self.auth.check_password(password):
-            token = self.auth.start_session(ip)
             resp = web.HTTPFound("/")
-            resp.set_cookie(self.COOKIE, token, httponly=True, samesite="Lax",
-                            secure=self.cfg.web.tls,
-                            max_age=self.cfg.web.session_hours * 3600, path="/")
+            self._set_session_cookie(resp, self.auth.start_session(ip))
             self._audit(request, "signed in to the web UI")
             return resp
         # Wrong password: count it; a trip past the limit bans the IP.
         self.auth.record_failure(ip)
         if self.auth.is_banned(ip):
             return web.Response(
-                text=login_page(banned_until=self.auth.banned_until(ip)),
+                text=login_page(mode=self.mode, banned_until=self.auth.banned_until(ip)),
                 content_type="text/html", status=403)
         return web.Response(
-            text=login_page(error="Incorrect password.",
+            text=login_page(mode=self.mode, error="Incorrect password.",
                             attempts_left=self.auth.attempts_left(ip)),
             content_type="text/html", status=401)
+
+    # -- Discord OAuth -------------------------------------------------------
+
+    def _redirect_uri(self, request: web.Request) -> str:
+        if self.cfg.web.discord_redirect_uri:
+            return self.cfg.web.discord_redirect_uri
+        return f"{request.scheme}://{request.host}/auth/discord/callback"
+
+    async def _discord_login(self, request: web.Request) -> web.Response:
+        if self.mode != AUTH_DISCORD:
+            return web.HTTPFound("/login")
+        state = secrets.token_urlsafe(24)
+        url = build_authorize_url(self.cfg.web.discord_client_id,
+                                  self._redirect_uri(request), state)
+        resp = web.HTTPFound(url)
+        # Short-lived, cross-site-safe cookie so the callback can verify `state`.
+        resp.set_cookie(self.STATE_COOKIE, state, httponly=True, samesite="Lax",
+                        secure=self.cfg.web.tls, max_age=600, path="/")
+        return resp
+
+    async def _discord_callback(self, request: web.Request) -> web.Response:
+        if self.mode != AUTH_DISCORD:
+            return web.HTTPFound("/login")
+        ip = request.remote or ""
+
+        def deny(message: str, status: int = 403) -> web.Response:
+            resp = web.Response(text=login_page(mode=self.mode, error=message),
+                                content_type="text/html", status=status)
+            resp.del_cookie(self.STATE_COOKIE, path="/")
+            return resp
+
+        if request.query.get("error"):
+            return deny("Discord login was cancelled.", status=401)
+        code = request.query.get("code", "")
+        state = request.query.get("state", "")
+        expected = request.cookies.get(self.STATE_COOKIE)
+        if not code or not state or not expected or not secrets.compare_digest(state, expected):
+            return deny("Login expired or was tampered with — please try again.", status=400)
+
+        try:
+            identity = await exchange_and_identify(
+                client_id=self.cfg.web.discord_client_id,
+                client_secret=self.cfg.web_discord_secret(),
+                code=code,
+                redirect_uri=self._redirect_uri(request),
+            )
+        except DiscordAuthError as e:
+            return deny(str(e), status=502)
+
+        if not identity.in_guild(self.cfg.discord.guild_id):
+            # Authenticated, but not a member of the server — count it toward the
+            # IP lockout so this can't be hammered, then refuse.
+            self.auth.record_failure(ip)
+            self._audit(request, f"denied web login: {identity.username} not in the server")
+            if self.auth.is_banned(ip):
+                return web.Response(
+                    text=login_page(mode=self.mode, banned_until=self.auth.banned_until(ip)),
+                    content_type="text/html", status=403)
+            return deny("You're not a member of the Discord server, so you can't use this page.")
+
+        resp = web.HTTPFound("/")
+        self._set_session_cookie(resp, self.auth.start_session(ip, who=identity.username))
+        resp.del_cookie(self.STATE_COOKIE, path="/")
+        self._audit(request, f"signed in via Discord as {identity.username}")
+        return resp
 
     async def _logout(self, request: web.Request) -> web.Response:
         self.auth.end_session(request.cookies.get(self.COOKIE))

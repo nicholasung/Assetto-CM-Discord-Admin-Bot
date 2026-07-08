@@ -79,7 +79,10 @@ def cmd_web(cfg: Config) -> int:
         app = App(cfg)
         await app.startup()
         if app.web_server is None:
-            raise ConfigError("web.enabled is false — set it to true to run `acbot web`.")
+            raise ConfigError(
+                "the web UI did not start — check web.enabled is true and the "
+                "logs above (e.g. a TLS misconfiguration)."
+            )
         log.info("web UI ready; press Ctrl+C to stop")
         try:
             await asyncio.Event().wait()  # run until interrupted
