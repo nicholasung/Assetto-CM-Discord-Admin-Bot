@@ -97,10 +97,13 @@ web:
   host: 0.0.0.0
   port: 8090
 
-  # Login method: "password" (one shared password) or "discord" (each visitor
+  # Login method: "password" (one shared password), "discord" (each visitor
   # logs in with Discord and is let in only if they're a member of the server
   # in discord.guild_id — no shared password to leak, and access revokes itself
-  # when someone leaves the server).
+  # when someone leaves the server), or "none" (NO login at all — the whole
+  # admin UI, including start/stop and settings, is open to anyone who can reach
+  # it; only use this when access is already locked down another way, e.g.
+  # host: 127.0.0.1, a firewall/LAN, or a reverse proxy that does its own auth).
   auth: password
 
   # --- auth: password ---

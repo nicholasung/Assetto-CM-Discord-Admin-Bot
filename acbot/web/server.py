@@ -25,7 +25,7 @@ from ..ac.backends.base import BackendError, NotSupportedError
 from ..ac.process import CooldownError, ProcessError, StrayProcessError
 from ..ac.staging import StagingError
 from ..ac.uploads import UploadError
-from ..config import AUTH_DISCORD, Config
+from ..config import AUTH_DISCORD, AUTH_NONE, Config
 from ..leaderboard.queries import fmt_laptime, recent_laps
 from ..util import fmt_duration, parse_hhmm
 from .auth import WebAuth
@@ -88,6 +88,10 @@ class WebServer:
 
         @web.middleware
         async def _mw(request: web.Request, handler):
+            # auth = "none": the UI is intentionally open, so skip the gate
+            # entirely (no bans, no sessions — there's nothing to log in to).
+            if server.mode == AUTH_NONE:
+                return await handler(request)
             ip = request.remote or ""
             if server.auth.is_banned(ip):
                 return server._blocked(request)
@@ -139,6 +143,11 @@ class WebServer:
         await self.site.start()
         scheme = "https" if ssl_ctx else "http"
         log.info("Web UI running on %s://%s:%d", scheme, self.cfg.web.host, self.cfg.web.port)
+        if self.mode == AUTH_NONE:
+            log.warning("web.auth=none — the admin UI has NO login and anyone who can "
+                        "reach %s:%d can control the server. Make sure access is "
+                        "restricted another way (LAN-only, reverse-proxy auth, firewall).",
+                        self.cfg.web.host, self.cfg.web.port)
 
     async def stop(self) -> None:
         if self.runner:
@@ -185,9 +194,13 @@ class WebServer:
         return web.Response(status=204)
 
     async def _dashboard(self, _request: web.Request) -> web.Response:
-        return web.Response(text=dashboard_page(), content_type="text/html")
+        # No login in "none" mode, so hide the (dead-end) log-out button.
+        return web.Response(text=dashboard_page(show_logout=self.mode != AUTH_NONE),
+                            content_type="text/html")
 
     async def _login_get(self, request: web.Request) -> web.Response:
+        if self.mode == AUTH_NONE:
+            return web.HTTPFound("/")  # nothing to log in to
         if self.auth.valid_session(request.cookies.get(self.COOKIE)):
             return web.HTTPFound("/")
         return web.Response(text=login_page(mode=self.mode), content_type="text/html")

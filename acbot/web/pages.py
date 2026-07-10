@@ -121,14 +121,16 @@ body {{ display:grid; place-items:center; min-height:100vh; }}</style></head>
 </div></body></html>"""
 
 
-def dashboard_page() -> str:
+def dashboard_page(show_logout: bool = True) -> str:
+    logout = ('<form method="post" action="/logout" style="margin:0">'
+              '<button class="sec">Log out</button></form>' if show_logout else "")
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Assetto Corsa admin</title><style>{_STYLE}</style></head>
 <body><div class="wrap">
   <div class="row spread">
     <h1 id="srvName">Assetto Corsa admin</h1>
-    <form method="post" action="/logout" style="margin:0"><button class="sec">Log out</button></form>
+    {logout}
   </div>
 
   <div class="card" id="statusCard">

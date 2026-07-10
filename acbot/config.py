@@ -19,7 +19,11 @@ BACKENDS = (VANILLA, ASSETTOSERVER)
 # Web login methods.
 AUTH_PASSWORD = "password"
 AUTH_DISCORD = "discord"
-WEB_AUTHS = (AUTH_PASSWORD, AUTH_DISCORD)
+# "none" leaves the admin UI completely open — no login at all. Only safe when
+# access is already restricted some other way (LAN-only, a reverse proxy that
+# does its own auth, an IP allowlist, etc.).
+AUTH_NONE = "none"
+WEB_AUTHS = (AUTH_PASSWORD, AUTH_DISCORD, AUTH_NONE)
 
 
 class ConfigError(Exception):
@@ -77,7 +81,8 @@ class WebConfig:
     enabled: bool = True
     host: str = "0.0.0.0"
     port: int = 8090
-    # "password" (shared password) or "discord" (Discord OAuth guild-membership).
+    # "password" (shared password), "discord" (Discord OAuth guild-membership),
+    # or "none" (no login at all — see AUTH_NONE).
     auth: str = AUTH_PASSWORD
     # Password fallback; the ACBOT_WEB_PASSWORD env var takes precedence.
     password: str | None = None
@@ -182,6 +187,8 @@ class Config:
 
     def web_auth_ready(self) -> bool:
         """Whether the configured web login method has what it needs to run."""
+        if self.web.auth == AUTH_NONE:
+            return True  # nothing to configure — the UI is left open
         if self.web.auth == AUTH_DISCORD:
             return bool(self.discord.guild_id and self.web.discord_client_id
                         and self.web_discord_secret())
@@ -316,7 +323,9 @@ def validate_for_run(cfg: Config) -> list[str]:
 def validate_for_web(cfg: Config) -> list[str]:
     """Blocking problems for `acbot web` (the standalone web UI, no bot)."""
     problems: list[str] = []
-    if cfg.web.auth == AUTH_DISCORD:
+    if cfg.web.auth == AUTH_NONE:
+        pass  # no credentials to check — the UI is intentionally left open
+    elif cfg.web.auth == AUTH_DISCORD:
         if not cfg.discord.guild_id:
             problems.append("discord.guild_id must be set (web.auth=discord checks membership of it)")
         if not cfg.web.discord_client_id:
