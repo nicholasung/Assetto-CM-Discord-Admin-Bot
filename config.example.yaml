@@ -86,6 +86,66 @@ downloads:
   # port forwarding). Leave blank or null to use 'port' for both internal and external.
   port_external: null
 
+web:
+  # Password-protected admin web UI onto the same backend as the bot. It runs
+  # alongside the bot (acbot run) and can also run on its own without Discord
+  # (acbot web). Turn it off to disable both.
+  enabled: true
+
+  # Interface + port to listen on. 0.0.0.0 exposes it on the LAN/internet; use
+  # 127.0.0.1 to keep it host-only. Forward this port if you want remote access.
+  host: 0.0.0.0
+  port: 8090
+
+  # Login method: "password" (one shared password) or "discord" (each visitor
+  # logs in with Discord and is let in only if they're a member of the server
+  # in discord.guild_id — no shared password to leak, and access revokes itself
+  # when someone leaves the server).
+  auth: password
+
+  # --- auth: password ---
+  # The single shared password. Prefer the ACBOT_WEB_PASSWORD environment
+  # variable (this file is readable by anyone with file access); this is only a
+  # fallback. Leave null and set the env var instead.
+  password: null
+
+  # --- auth: discord ---
+  # From your Discord application (https://discord.com/developers/applications):
+  # OAuth2 → Client ID + Client Secret, and add a redirect of
+  #   http(s)://<your-host>:8090/auth/discord/callback
+  # under OAuth2 → Redirects. The guild checked is discord.guild_id above.
+  discord_client_id: null
+  # Prefer the ACBOT_WEB_DISCORD_SECRET env var over putting the secret here.
+  discord_client_secret: null
+  # Usually leave null — it's derived from the request. Set it only if the
+  # auto-derived URL wouldn't match the redirect you registered on Discord
+  # (e.g. behind a proxy/domain): e.g. https://acbot.example.com/auth/discord/callback
+  discord_redirect_uri: null
+
+  # Lockout: after this many failed logins an IP is banned for ban_hours. The
+  # ban list is data/web_bans.txt — delete a line there to lift a ban (no
+  # restart needed). Loopback (127.0.0.1 / ::1) is NEVER banned, so you can't
+  # lock yourself out from the host.
+  max_attempts: 3
+  ban_hours: 24
+
+  # Extra IPs that can never be banned (in addition to loopback), e.g. your
+  # office/home IP. One per line.
+  never_ban: []
+
+  # How long a successful login stays signed in (hours).
+  session_hours: 12
+
+  # Serve the UI over HTTPS so the password/session aren't sent in the clear.
+  # Recommended whenever the UI is reachable off the local host.
+  tls: false
+  # Your own PEM certificate + private key (e.g. from a CA or internal PKI).
+  # Leave both null and set tls: true to auto-generate a long-lived self-signed
+  # cert in the data dir on first run (browsers show a one-time trust warning,
+  # but traffic is still encrypted). Relative paths resolve next to this file.
+  tls_cert: null
+  tls_key: null
+
 assettoserver:
   # Optional per-version wiring for AssettoServer extras. AS is actively
   # developed and key names change; check your extra_cfg.yml.
