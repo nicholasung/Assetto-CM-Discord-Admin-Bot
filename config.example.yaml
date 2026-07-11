@@ -89,13 +89,15 @@ downloads:
 web:
   # Password-protected admin web UI onto the same backend as the bot. It runs
   # alongside the bot (acbot run) and can also run on its own without Discord
-  # (acbot web). Turn it off to disable both.
+  # (acbot web). Turn it off to disable both. When enabled, also hosts the
+  # download/upload server (otherwise it's on its own). Turn it off to disable both.
   enabled: true
 
-  # Interface + port to listen on. 0.0.0.0 exposes it on the LAN/internet; use
-  # 127.0.0.1 to keep it host-only. Forward this port if you want remote access.
+  # Interface + port to listen on (shared with download/upload server when web is
+  # enabled). 0.0.0.0 exposes it on the LAN/internet; use 127.0.0.1 to keep it
+  # host-only. Forward this port if you want remote access.
   host: 0.0.0.0
-  port: 8090
+  port: 8082
 
   # Login method: "password" (one shared password), "discord" (each visitor
   # logs in with Discord and is let in only if they're a member of the server

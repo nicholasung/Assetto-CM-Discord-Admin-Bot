@@ -50,11 +50,13 @@ class FileServer:
     def __init__(self, host: str, port: int, root_dir: Path, cache_dir: Path,
                  upload_store: UploadStore | None = None,
                  on_upload: Callable[[PendingUpload], Awaitable[None]] | None = None,
-                 max_upload_bytes: int = UPLOAD_MAX_BYTES):
+                 max_upload_bytes: int = UPLOAD_MAX_BYTES,
+                 app: web.Application | None = None):
         self.uploads = upload_store
         self.on_upload = on_upload
         self.max_upload_bytes = max_upload_bytes
-        self.app = web.Application(client_max_size=max_upload_bytes + 16 * 1024 * 1024)
+        self.app = app if app is not None else \
+            web.Application(client_max_size=max_upload_bytes + 16 * 1024 * 1024)
         self.app.router.add_get('/downloads/{filename:.+}', self._serve_file)
         # Landing page + its polling endpoint (see _download_page). The Discord
         # links point at /get/... so the browser never hangs on a cold zip build.
@@ -70,6 +72,7 @@ class FileServer:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.host = host
         self.port = port
+        self._owns_runner = app is None  # only manage runner if we own the app
         self._zip_lock = asyncio.Lock()
         # Folder path -> in-flight background zip build, so the landing page can
         # poll build status without kicking off a duplicate build each time.
@@ -245,6 +248,8 @@ class FileServer:
             pass
 
     async def start(self) -> None:
+        if not self._owns_runner:
+            return  # app runner is managed elsewhere
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
         self.site = web.TCPSite(self.runner, self.host, self.port)
@@ -252,7 +257,7 @@ class FileServer:
         log.info(f"Download server running on {self.host}:{self.port}")
 
     async def stop(self) -> None:
-        if self.runner:
+        if self._owns_runner and self.runner:
             await self.runner.cleanup()
         self._clear_cache()
 
@@ -458,16 +463,18 @@ class App:
         self.public_ip = await resolve_public_ip(self.cfg.server.public_ip)
         if self.public_ip:
             log.info("public IP: %s", self.public_ip)
+        # Start web UI first (if enabled) so FileServer can share its app.
+        await self._start_web()
         self.file_server = FileServer(
             host="0.0.0.0",
-            port=8082,
+            port=self.cfg.web.port if self.web_server else 8082,
             root_dir=self.cfg.paths.ac_root / "content",
             cache_dir=self.cfg.downloads_cache_dir,
             upload_store=self.uploads,
             on_upload=self._on_car_uploaded,
+            app=self.web_server.web_app if self.web_server else None,
         )
         await self.file_server.start()
-        await self._start_web()
         # Warm the car/track index off the loop so the first autocomplete is
         # instant instead of triggering a multi-second scan on the event loop.
         self._content_warm = asyncio.create_task(self._warm_content())

@@ -64,6 +64,26 @@ class StatusCog(commands.Cog):
         view.add_item(discord.ui.Button(label="Join in Content Manager", url=url))
         await interaction.response.send_message(embed=embed, view=view)
 
+    @app_commands.command(name="webui", description="Get the admin web UI link")
+    async def webui(self, interaction: discord.Interaction) -> None:
+        if not self.app.public_ip:
+            await interaction.response.send_message(
+                "Web UI link unavailable: public IP unknown. "
+                "Set `server.public_ip` in config.yaml.", ephemeral=True)
+            return
+        scheme = "https" if self.app.cfg.web.tls else "http"
+        url = f"{scheme}://{self.app.public_ip}:{self.app.cfg.web.port}"
+        embed = discord.Embed(
+            title="Admin web UI",
+            description=f"Open **[the admin dashboard]({url})** to start/stop the server, "
+                        "change settings, manage uploads, and view the leaderboard.",
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(name="Link", value=url, inline=False)
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(label="Open admin dashboard", url=url))
+        await interaction.response.send_message(embed=embed, view=view)
+
     # -- /status pin -------------------------------------------------------------
 
     @status_group.command(name="pin", description="(Re)create the auto-updating status message here or in the configured channel")
