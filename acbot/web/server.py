@@ -85,12 +85,18 @@ class WebServer:
 
         public = ("/login", "/favicon.ico",
                   "/auth/discord/login", "/auth/discord/callback")
+        # The file server's routes (see FileServer in app.py) share this app but
+        # stay login-free, exactly as when they ran on their own port: the
+        # download/upload links posted in Discord must work for everyone.
+        open_prefixes = ("/downloads/", "/get/", "/prepare/", "/upload")
 
         @web.middleware
         async def _mw(request: web.Request, handler):
             # auth = "none": the UI is intentionally open, so skip the gate
             # entirely (no bans, no sessions — there's nothing to log in to).
             if server.mode == AUTH_NONE:
+                return await handler(request)
+            if request.path.startswith(open_prefixes):
                 return await handler(request)
             ip = request.remote or ""
             if server.auth.is_banned(ip):
@@ -135,19 +141,24 @@ class WebServer:
         r.add_get("/api/leaderboard/recent", self._api_recent)
 
     async def start(self) -> None:
+        """Serve the shared app (dashboard + downloads/uploads) on the one
+        public port, downloads.port. Must run after every route is added —
+        setting up the runner freezes the router."""
+        port = self.cfg.downloads.port
         ssl_ctx = build_ssl_context(self.cfg)  # None => plain HTTP; raises on TLS misconfig
         self.runner = web.AppRunner(self.web_app)
         await self.runner.setup()
-        self.site = web.TCPSite(self.runner, self.cfg.web.host, self.cfg.web.port,
+        self.site = web.TCPSite(self.runner, self.cfg.web.host, port,
                                 ssl_context=ssl_ctx)
         await self.site.start()
         scheme = "https" if ssl_ctx else "http"
-        log.info("Web UI running on %s://%s:%d", scheme, self.cfg.web.host, self.cfg.web.port)
+        log.info("Web UI + downloads running on %s://%s:%d",
+                 scheme, self.cfg.web.host, port)
         if self.mode == AUTH_NONE:
             log.warning("web.auth=none — the admin UI has NO login and anyone who can "
                         "reach %s:%d can control the server. Make sure access is "
                         "restricted another way (LAN-only, reverse-proxy auth, firewall).",
-                        self.cfg.web.host, self.cfg.web.port)
+                        self.cfg.web.host, port)
 
     async def stop(self) -> None:
         if self.runner:
@@ -179,8 +190,8 @@ class WebServer:
         host = self.app.public_ip
         if not host:
             host = (request.host or "127.0.0.1").split(":")[0]
-        port = getattr(getattr(self.app, "file_server", None), "port", 8082)
-        return f"http://{host}:{port}/downloads"
+        scheme = "https" if self.cfg.web.tls else "http"
+        return f"{scheme}://{host}:{self.cfg.downloads.public_port}/downloads"
 
     def _blocked(self, request: web.Request) -> web.Response:
         until = self.auth.banned_until(request.remote or "")

@@ -66,13 +66,18 @@ class StatusCog(commands.Cog):
 
     @app_commands.command(name="webui", description="Get the admin web UI link")
     async def webui(self, interaction: discord.Interaction) -> None:
-        if not self.app.public_ip:
+        if self.app.web_server is None:
+            await interaction.response.send_message(
+                "The web UI is not running — check `web.enabled` and the bot logs.",
+                ephemeral=True)
+            return
+        base = self.app.public_http_base()
+        if base is None:
             await interaction.response.send_message(
                 "Web UI link unavailable: public IP unknown. "
                 "Set `server.public_ip` in config.yaml.", ephemeral=True)
             return
-        scheme = "https" if self.app.cfg.web.tls else "http"
-        url = f"{scheme}://{self.app.public_ip}:{self.app.cfg.web.port}"
+        url = base
         embed = discord.Embed(
             title="Admin web UI",
             description=f"Open **[the admin dashboard]({url})** to start/stop the server, "

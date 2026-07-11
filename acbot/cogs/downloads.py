@@ -98,7 +98,7 @@ class DownloadsCog(commands.GroupCog, group_name="download",
                 content="Download server not ready (no public IP).")
             return
 
-        url = (f"http://{self.app.public_ip}:8082/get/cars/{quote(car.car_id)}"
+        url = (f"{self.app.public_http_base()}/get/cars/{quote(car.car_id)}"
                f"?name={quote(car.label)}")
         embed = discord.Embed(title=car.label, color=discord.Color.green())
         embed.add_field(name="Download", value=f"[Click here]({url})", inline=False)
@@ -119,7 +119,7 @@ class DownloadsCog(commands.GroupCog, group_name="download",
                 content="Download server not ready (no public IP).")
             return
 
-        url = (f"http://{self.app.public_ip}:8082/get/tracks/{quote(name)}"
+        url = (f"{self.app.public_http_base()}/get/tracks/{quote(name)}"
                f"?name={quote(name)}")
         embed = discord.Embed(title=name, color=discord.Color.green())
         embed.add_field(name="Download", value=f"[Click here]({url})", inline=False)

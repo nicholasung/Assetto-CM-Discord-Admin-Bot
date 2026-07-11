@@ -74,13 +74,28 @@ class AssettoServerConfig:
 
 
 @dataclass
+class DownloadsConfig:
+    """The public HTTP server: content downloads, car uploads and — when the
+    web UI is enabled — the admin dashboard, all on this one port."""
+
+    port: int = 8082
+    # Public-facing port when the router forwards a different one (e.g.
+    # 8082 → 8083). Only affects the links posted in Discord; None => `port`.
+    port_external: int | None = None
+
+    @property
+    def public_port(self) -> int:
+        return self.port_external or self.port
+
+
+@dataclass
 class WebConfig:
     """Admin web UI (see acbot/web/). Login is either a shared password or
-    Discord OAuth (verifies the visitor is a member of the configured guild)."""
+    Discord OAuth (verifies the visitor is a member of the configured guild).
+    Served on downloads.port, sharing the file server's aiohttp app."""
 
     enabled: bool = True
     host: str = "0.0.0.0"
-    port: int = 8090
     # "password" (shared password), "discord" (Discord OAuth guild-membership),
     # or "none" (no login at all — see AUTH_NONE).
     auth: str = AUTH_PASSWORD
@@ -114,6 +129,7 @@ class Config:
     paths: PathsConfig = field(default_factory=PathsConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     assettoserver: AssettoServerConfig = field(default_factory=AssettoServerConfig)
+    downloads: DownloadsConfig = field(default_factory=DownloadsConfig)
     web: WebConfig = field(default_factory=WebConfig)
     base_dir: Path = Path(".")
 
@@ -234,6 +250,7 @@ def load_config(path: Path | str) -> Config:
     p = raw.get("paths") or {}
     s = raw.get("server") or {}
     a = raw.get("assettoserver") or {}
+    dl = raw.get("downloads") or {}
     w = raw.get("web") or {}
 
     cfg = Config(
@@ -264,10 +281,13 @@ def load_config(path: Path | str) -> Config:
             collisions_yaml_key=a.get("collisions_yaml_key") or None,
             settime_console_template=a.get("settime_console_template") or None,
         ),
+        downloads=DownloadsConfig(
+            port=int(dl.get("port") or 8082),
+            port_external=_opt_int(dl.get("port_external")),
+        ),
         web=WebConfig(
             enabled=bool(w.get("enabled", True)),
             host=str(w.get("host") or "0.0.0.0"),
-            port=int(w.get("port") or 8090),
             auth=str(w.get("auth") or AUTH_PASSWORD).lower(),
             password=(str(w["password"]).strip() or None
                       if w.get("password") not in (None, "", "null") else None),

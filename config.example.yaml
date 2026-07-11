@@ -77,27 +77,25 @@ server:
   udp_plugin_listen: 127.0.0.1:12000
 
 downloads:
-  # Port the content download HTTP server listens on (internally).
-  # If port-forwarded differently (e.g. 8082 → 8083), set download_port_external
-  # so Discord links use the correct public port.
+  # The one public HTTP port: content downloads, car uploads and — when the
+  # web UI below is enabled — the admin dashboard are all served on it.
   port: 8082
-  
-  # Optional: public-facing port if different from internal port (e.g. due to
-  # port forwarding). Leave blank or null to use 'port' for both internal and external.
+
+  # Optional: public-facing port if different from 'port' (e.g. the router
+  # forwards 8083 → 8082). Only changes the links posted in Discord; leave
+  # null to use 'port' for both.
   port_external: null
 
 web:
-  # Password-protected admin web UI onto the same backend as the bot. It runs
-  # alongside the bot (acbot run) and can also run on its own without Discord
-  # (acbot web). Turn it off to disable both. When enabled, also hosts the
-  # download/upload server (otherwise it's on its own). Turn it off to disable both.
+  # Admin web UI onto the same backend as the bot. It runs alongside the bot
+  # (acbot run) and can also run on its own without Discord (acbot web).
+  # Served on downloads.port above, together with the download/upload pages
+  # (which stay login-free regardless of the auth mode below).
   enabled: true
 
-  # Interface + port to listen on (shared with download/upload server when web is
-  # enabled). 0.0.0.0 exposes it on the LAN/internet; use 127.0.0.1 to keep it
-  # host-only. Forward this port if you want remote access.
+  # Interface to listen on. 0.0.0.0 exposes it on the LAN/internet; use
+  # 127.0.0.1 to keep it host-only. Forward downloads.port for remote access.
   host: 0.0.0.0
-  port: 8082
 
   # Login method: "password" (one shared password), "discord" (each visitor
   # logs in with Discord and is let in only if they're a member of the server
@@ -117,7 +115,7 @@ web:
   # --- auth: discord ---
   # From your Discord application (https://discord.com/developers/applications):
   # OAuth2 → Client ID + Client Secret, and add a redirect of
-  #   http(s)://<your-host>:8090/auth/discord/callback
+  #   http(s)://<your-host>:8082/auth/discord/callback  (the downloads.port)
   # under OAuth2 → Redirects. The guild checked is discord.guild_id above.
   discord_client_id: null
   # Prefer the ACBOT_WEB_DISCORD_SECRET env var over putting the secret here.

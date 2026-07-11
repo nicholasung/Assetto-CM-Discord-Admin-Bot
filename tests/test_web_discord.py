@@ -77,7 +77,7 @@ def test_invalid_auth_mode_rejected(tmp_path):
 def discord_cfg(tmp_path):
     cfg = Config(base_dir=tmp_path)
     cfg.discord.guild_id = GUILD
-    cfg.web = WebConfig(auth=AUTH_DISCORD, host="127.0.0.1", port=0,
+    cfg.web = WebConfig(auth=AUTH_DISCORD, host="127.0.0.1",
                         discord_client_id="cid", discord_client_secret="secret")
     cfg.ensure_dirs()
     return cfg

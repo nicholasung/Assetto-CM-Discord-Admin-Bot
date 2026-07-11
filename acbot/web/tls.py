@@ -9,7 +9,9 @@ Two ways to serve HTTPS:
     `cryptography` package.
 
 Only the admin UI needs this — it's what carries the password/session. The
-content download server (port 8082) serves public files with no credentials.
+content download/upload routes on the shared port serve public files with no
+credentials (and fall back to a standalone plain-HTTP server if TLS here is
+misconfigured).
 """
 
 from __future__ import annotations

@@ -78,7 +78,7 @@ class UploadsCog(commands.GroupCog, group_name="upload",
             await interaction.response.send_message(
                 "Upload server not ready (no public IP).", ephemeral=True)
             return
-        url = f"http://{self.app.public_ip}:8082/upload"
+        url = f"{self.app.public_http_base()}/upload"
         embed = discord.Embed(
             title="Upload a car",
             description=f"Open **[this upload page]({url})** and pick a car mod `.zip`.\n"

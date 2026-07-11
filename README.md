@@ -213,8 +213,9 @@ and you can run it **without** the Discord bot at all:
 python -m acbot web
 ```
 
-Open `http://<vm-ip>:8090` (forward the port for remote access). Tune the `web:`
-block in `config.yaml` for host/port/lockout.
+Open `http://<vm-ip>:8082` — the web UI shares `downloads.port` with the
+content download/upload pages, so there is exactly one port to forward. Tune
+the `web:` block in `config.yaml` for host/auth/lockout.
 
 **Login: choose one method (`web.auth`).**
 
@@ -223,7 +224,7 @@ let in only if they're a member of your server (`discord.guild_id`). No shared
 password to leak, and access self-revokes when someone leaves the server. Set it
 up once in the [Discord developer portal](https://discord.com/developers/applications)
 under **OAuth2**: copy the **Client ID**, add a **redirect** of
-`http://<vm-ip>:8090/auth/discord/callback`, then:
+`http://<vm-ip>:8082/auth/discord/callback`, then:
 
 ```powershell
 setx ACBOT_WEB_DISCORD_SECRET "your-oauth2-client-secret"   # then a NEW terminal
@@ -240,7 +241,12 @@ web:
 setx ACBOT_WEB_PASSWORD "some-strong-password"   # then open a NEW terminal
 ```
 
-**Lockout (both methods).** Three failed logins block that IP for 24 hours (in
+*Open (`auth: none`):* no login at all — anyone who can reach the port has full
+control of the server. Only use it when access is already restricted some other
+way (bind `web.host: 127.0.0.1`, a LAN/VPN, a firewall, or a reverse proxy that
+does its own auth). The bot logs a warning at startup to remind you.
+
+**Lockout (both login methods).** Three failed logins block that IP for 24 hours (in
 Discord mode, "failed" = authenticated but not a member of the server). Blocks
 are recorded in `data\web_bans.txt` — a plain text file you can edit on the host:
 delete a line (or set its time in the past) to lift a block, no restart needed.
@@ -261,7 +267,7 @@ concern, don't just turn on self-signed TLS (it adds a browser warning for every
 device); prefer one of, in order of least friction:
 
 - **A private network** — bind `web.host: 127.0.0.1` and reach it over a VPN
-  (e.g. Tailscale) or an SSH tunnel instead of forwarding 8090 publicly.
+  (e.g. Tailscale) or an SSH tunnel instead of forwarding the port publicly.
   Strangers can't route to it at all; no cert warning, ever.
 - **A real certificate** — point a domain or free dynamic-DNS name at the VM and
   get a Let's Encrypt cert (`web.tls_cert` / `web.tls_key`). Zero warning, full
@@ -271,10 +277,10 @@ device); prefer one of, in order of least friction:
   the generated cert into its trust store.
 
 With TLS on, the session cookie is flagged `Secure` and the site is served at
-`https://<vm-ip>:8090`; if it's misconfigured the web UI simply doesn't start
-rather than falling back to plaintext (reason logged to `data\logs\acbot.log`).
-The content download server (port 8082) is unaffected either way — it serves
-public files with no credentials.
+`https://<vm-ip>:8082`; if it's misconfigured the web UI simply doesn't start
+rather than falling back to plaintext (reason logged to `data\logs\acbot.log`)
+— the downloads/uploads then fall back to a standalone plain-HTTP server on
+the same port, since they serve public files with no credentials.
 
 ## AssettoServer backend
 

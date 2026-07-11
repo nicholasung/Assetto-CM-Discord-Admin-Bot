@@ -450,6 +450,16 @@ class App:
             return None
         return f"https://acstuff.club/s/q:race/online/join?ip={self.public_ip}&httpPort={port}"
 
+    def public_http_base(self) -> str | None:
+        """Base URL for every link posted in Discord (downloads, uploads and
+        the web UI — one shared port), or None while the public IP is unknown."""
+        if not self.public_ip:
+            return None
+        # TLS only ever terminates on the web UI's listener; the standalone
+        # file server (web UI off or misconfigured) is always plain HTTP.
+        scheme = "https" if (self.web_server is not None and self.cfg.web.tls) else "http"
+        return f"{scheme}://{self.public_ip}:{self.cfg.downloads.public_port}"
+
     # -- lifecycle ---------------------------------------------------------------
 
     async def startup(self) -> None:
@@ -463,26 +473,47 @@ class App:
         self.public_ip = await resolve_public_ip(self.cfg.server.public_ip)
         if self.public_ip:
             log.info("public IP: %s", self.public_ip)
-        # Start web UI first (if enabled) so FileServer can share its app.
-        await self._start_web()
-        self.file_server = FileServer(
-            host="0.0.0.0",
-            port=self.cfg.web.port if self.web_server else 8082,
-            root_dir=self.cfg.paths.ac_root / "content",
-            cache_dir=self.cfg.downloads_cache_dir,
-            upload_store=self.uploads,
-            on_upload=self._on_car_uploaded,
-            app=self.web_server.web_app if self.web_server else None,
-        )
-        await self.file_server.start()
+        # One public HTTP server on downloads.port: the web UI (when enabled)
+        # owns the aiohttp app so its auth middleware runs, and the FileServer
+        # registers the download/upload routes into it. Routes must all be in
+        # place before the runner starts — starting freezes the router.
+        web_server = self._build_web()
+        self.file_server = self._make_file_server(
+            web_server.web_app if web_server else None)
+        if web_server is not None:
+            from .web.tls import WebTLSError
+            try:
+                await web_server.start()  # serves dashboard + downloads together
+                self.web_server = web_server
+            except WebTLSError:
+                # Never serve the admin UI in the clear when HTTPS was requested
+                # but is misconfigured — drop it (bot keeps running) and fall
+                # back to a standalone file server so content links still work.
+                log.exception("web UI not started: TLS is misconfigured")
+                self.file_server = self._make_file_server(None)
+                await self.file_server.start()
+        else:
+            await self.file_server.start()
         # Warm the car/track index off the loop so the first autocomplete is
         # instant instead of triggering a multi-second scan on the event loop.
         self._content_warm = asyncio.create_task(self._warm_content())
 
-    async def _start_web(self) -> None:
-        """Start the admin web UI when enabled and its login method is ready."""
+    def _make_file_server(self, shared_app: web.Application | None) -> FileServer:
+        return FileServer(
+            host="0.0.0.0",
+            port=self.cfg.downloads.port,
+            root_dir=self.cfg.paths.ac_root / "content",
+            cache_dir=self.cfg.downloads_cache_dir,
+            upload_store=self.uploads,
+            on_upload=self._on_car_uploaded,
+            app=shared_app,
+        )
+
+    def _build_web(self):
+        """Build (not start) the admin web UI when enabled and its login
+        method is ready; None otherwise."""
         if not self.cfg.web.enabled:
-            return
+            return None
         if not self.cfg.web_auth_ready():
             if self.cfg.web.auth == "discord":
                 log.warning("web UI enabled but Discord OAuth isn't configured — skipping it "
@@ -491,18 +522,9 @@ class App:
             else:
                 log.warning("web UI enabled but no password set — skipping it "
                             "(set ACBOT_WEB_PASSWORD or web.password to enable)")
-            return
+            return None
         from .web.server import WebServer
-        from .web.tls import WebTLSError
-        server = WebServer(self, self.cfg)
-        try:
-            await server.start()
-        except WebTLSError:
-            # Never serve the admin UI in the clear when HTTPS was requested but
-            # is misconfigured — leave it off (bot keeps running) and log why.
-            log.exception("web UI not started: TLS is misconfigured")
-            return
-        self.web_server = server
+        return WebServer(self, self.cfg)
 
     async def _warm_content(self) -> None:
         try:
