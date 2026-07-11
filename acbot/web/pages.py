@@ -376,10 +376,10 @@ function renderContent(){
   $("carCount").textContent = "("+cars.length+")";
   $("trackCount").textContent = "("+tracks.length+")";
   $("carsList").innerHTML = cars.length ? cars.map(c=>
-    `<a href="${esc(c.url)}"><b>${esc(c.name)}</b> <span class="mut small">${esc(c.id)}</span></a>`).join("")
+    `<a href="${esc(c.url)}" target="_blank" rel="noopener"><b>${esc(c.name)}</b> <span class="mut small">${esc(c.id)}</span></a>`).join("")
     : '<div class="item mut">No cars.</div>';
   $("tracksList").innerHTML = tracks.length ? tracks.map(t=>
-    `<a href="${esc(DLBASE)}/tracks/${encodeURIComponent(t)}">${esc(t)}</a>`).join("")
+    `<a href="${esc(DLBASE)}/tracks/${encodeURIComponent(t)}?name=${encodeURIComponent(t)}" target="_blank" rel="noopener">${esc(t)}</a>`).join("")
     : '<div class="item mut">No tracks.</div>';
 }
 

@@ -187,11 +187,13 @@ class WebServer:
                         max_age=self.cfg.web.session_hours * 3600, path="/")
 
     def _download_base(self, request: web.Request) -> str:
+        """Base for content links: the /get landing page (spinner while the
+        zip is packaged, then a download button), same as the Discord links."""
         host = self.app.public_ip
         if not host:
             host = (request.host or "127.0.0.1").split(":")[0]
         scheme = "https" if self.cfg.web.tls else "http"
-        return f"{scheme}://{host}:{self.cfg.downloads.public_port}/downloads"
+        return f"{scheme}://{host}:{self.cfg.downloads.public_port}/get"
 
     def _blocked(self, request: web.Request) -> web.Response:
         until = self.auth.banned_until(request.remote or "")
@@ -395,7 +397,7 @@ class WebServer:
         base = self._download_base(request)
         cars = [
             {"id": c.car_id, "name": c.display_name,
-             "url": f"{base}/cars/{quote(c.car_id)}"}
+             "url": f"{base}/cars/{quote(c.car_id)}?name={quote(c.display_name)}"}
             for c in app.content.all_cars()
         ]
         return web.json_response({
